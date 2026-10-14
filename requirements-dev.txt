@@ -1,0 +1,2 @@
+# Unit tests (aiohttp ships with ComfyUI; plain Python needs it for the route tests).
+aiohttp>=3.9

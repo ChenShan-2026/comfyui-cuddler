@@ -1,0 +1,6 @@
+# Not shipped to the Comfy Registry: development-only files.
+tests/
+scripts/
+.github/
+package.json
+requirements-dev.txt
