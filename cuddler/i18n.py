@@ -30,6 +30,14 @@ MESSAGES = {
         "The key file could not be changed. Make sure ComfyUI can write to its user folder and that no "
         "other program is using the file, then try again.",
         "无法修改 key 文件。请确认 ComfyUI 对 user 文件夹有写入权限，且没有其他程序占用该文件，然后重试。"),
+    "forbidden_origin": (
+        "ComfyUI only answers pages it serves under its own address, so this page cannot read or change the "
+        "Cuddler settings. Open ComfyUI at http://localhost or by its IP address (with its port). If you reach "
+        "it through a domain name, add that name to the CUDDLER_ALLOWED_HOSTS environment variable and "
+        "restart ComfyUI.",
+        "ComfyUI 只响应从它自己的地址打开的页面，所以这个页面不能读取或修改 Cuddler 设置。"
+        "请用 http://localhost 或本机的 IP 地址（带端口）打开 ComfyUI；如果是通过域名访问，"
+        "请把该域名加入环境变量 CUDDLER_ALLOWED_HOSTS，然后重启 ComfyUI。"),
     "test_key": (
         "A test key can only show prices. Use a live key to generate.",
         "测试 key 只能查价格，生成需要正式（live）key。"),
