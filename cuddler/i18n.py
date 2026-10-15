@@ -92,6 +92,9 @@ MESSAGES = {
     "media_too_large": ("This file is larger than the {limit} limit.", "这个文件超过了 {limit} 的上限。"),
     "upload_rejected": ("The platform rejected this media: {reason}", "平台拒绝了这份素材：{reason}"),
     "upload_expired": ("The upload expired. Run the node again.", "上传已过期，请重新运行。"),
+    "upload_checking": (
+        "The platform is still checking this file. Run the node again in a minute: it continues with the same upload.",
+        "平台还在检查这份素材。请过一会儿重新运行，会接着同一次上传继续。"),
     "job_failed": ("The job failed: {reason}", "任务失败：{reason}"),
     "job_canceled": ("The job was canceled.", "任务已取消。"),
     "output_expired": (
