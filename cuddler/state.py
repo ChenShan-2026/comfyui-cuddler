@@ -1,7 +1,9 @@
 """Job and upload records in SQLite.
 
 A job record holds a run fingerprint, the idempotency key used to create the
-job, the job id and its last known status. Nothing else: no key, prompt or media.
+job, what the create request added to the run's inputs (upload ids, max_usd and
+the client tag, so that an unanswered request can be sent again unchanged), the
+job id and its last known status. Nothing else: no key, prompt or media.
 
 Every failure surfaces as CuddlerError("state_unavailable"): a locked, read-only
 or unopenable database, a full disk. The one exception is a file that is not a
@@ -37,7 +39,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_id TEXT,
   status TEXT NOT NULL,
   created_at REAL NOT NULL,
-  updated_at REAL NOT NULL
+  updated_at REAL NOT NULL,
+  request TEXT
 );
 CREATE TABLE IF NOT EXISTS uploads (
   digest TEXT PRIMARY KEY,
@@ -125,11 +128,13 @@ class StateDB:
     def job(self, fingerprint):
         return self._one("SELECT * FROM jobs WHERE fingerprint = ?", (fingerprint,))
 
-    def begin_job(self, fingerprint, kind, idempotency_key):
-        """Record a new attempt, replacing whatever the run had: the caller has checked it is dead or absent."""
+    def begin_job(self, fingerprint, kind, idempotency_key, request=None):
+        """Record the key a create request is about to carry, and (`request`, JSON text) what that request adds to
+        the run's inputs. Replaces whatever the run had: the caller has checked it is dead or absent."""
         now = self._clock()
-        self._write("INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, NULL, 'submitting', ?, ?)",
-                    (fingerprint, kind, idempotency_key, now, now))
+        self._write("INSERT OR REPLACE INTO jobs (fingerprint, kind, idempotency_key, job_id, status, created_at, "
+                    "updated_at, request) VALUES (?, ?, ?, NULL, 'submitting', ?, ?, ?)",
+                    (fingerprint, kind, idempotency_key, now, now, request))
 
     def update_job(self, fingerprint, *, status, job_id=None):
         self._write("UPDATE jobs SET status = ?, job_id = COALESCE(?, job_id), updated_at = ? "

@@ -108,6 +108,8 @@ MESSAGES = {
         "已停止等待，但任务没有被取消：它会在 Cuddler 上继续生成并正常计费。再次运行这个节点即可取回结果。"),
     "interrupted_canceled": (
         "Stopped. The queued job was canceled.", "已停止，排队中的任务已取消。"),
+    "interrupted_before_create": (
+        "Stopped before the job was sent. Nothing was charged.", "已在发送任务前停止，没有产生费用。"),
     "wait_timeout": (
         "Not finished after an hour. Run the node again to keep waiting.",
         "等了一小时还没完成。再次运行这个节点会继续等待。"),

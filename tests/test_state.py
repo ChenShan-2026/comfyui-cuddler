@@ -165,7 +165,7 @@ class StateFailureTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(db.path).st_mode), 0o600)
         connection = sqlite3.connect(db.path)
         self.addCleanup(connection.close)
-        connection.execute("INSERT INTO jobs VALUES ('a', 'video', 'k', NULL, 'submitting', 1, 1)")
+        connection.execute("INSERT INTO jobs VALUES ('a', 'video', 'k', NULL, 'submitting', 1, 1, NULL)")
         journal = db.path.with_name("state.sqlite3-journal")  # what a crash would leave behind
         self.assertEqual(stat.S_IMODE(os.stat(journal).st_mode), 0o600)
         connection.rollback()

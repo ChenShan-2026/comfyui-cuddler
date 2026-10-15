@@ -1,0 +1,372 @@
+import asyncio
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+from cuddler_plugin.cuddler import CLIENT_TAG
+from cuddler_plugin.cuddler.client import PlatformClient
+from cuddler_plugin.cuddler.errors import CuddlerError
+from cuddler_plugin.cuddler.jobs import JobRunner, JobSpec, MediaInput
+from cuddler_plugin.cuddler.state import StateDB
+from cuddler_plugin.cuddler.uploads import Uploader
+from tests import fakes
+
+BODY = {"model": "seedance-2.5", "prompt": "an orange ball", "duration": 4, "resolution": "720p"}
+ESTIMATE_BODY = {"model": "seedance-2.5", "duration": 4, "resolution": "720p"}
+JOB_URL = "/videos/" + fakes.VIDEO_ID
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    async def sleep(self, seconds):
+        self.now += seconds
+        await asyncio.sleep(0)
+
+
+def make_runner(directory, transport, clock):
+    state = StateDB(Path(directory))
+    client = PlatformClient(transport, fakes.LIVE_KEY)
+    runner = JobRunner(client, state, Uploader(client, state, sleep=lambda s: None), sleep=clock.sleep, clock=clock)
+    return runner, state
+
+
+def make_spec(**changes):
+    values = dict(kind="video", body=dict(BODY), estimate_body=dict(ESTIMATE_BODY), cap_usd="2.000000", seed=1)
+    values.update(changes)
+    return JobSpec(**values)
+
+
+class JobRunnerTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.transport = fakes.FakeTransport()
+        self.clock = FakeClock()
+        self.runner, self.state = make_runner(self.tmp.name, self.transport, self.clock)
+        self.events = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def spec(self, **changes):
+        return make_spec(**changes)
+
+    async def run_job(self, spec=None, interrupted=lambda: False):
+        return await self.runner.run(spec or self.spec(), interrupted=interrupted,
+                                     progress=lambda event, value=None: self.events.append((event, value)))
+
+    def script_estimate(self, hold="0.666955"):
+        self.transport.add("POST", "/videos/estimate", body=fakes.estimate(hold=hold))
+
+    def after_create(self):
+        """Interrupted once the job exists: the person stops the run while it is queued or running."""
+        return bool(self.transport.calls("POST", "/videos"))
+
+    async def test_a_local_state_failure_before_the_create_records_nothing(self):
+        spec = self.spec(media=[MediaInput("first_frame", b"png-bytes", "image", "image/png", "a.png")])
+        with mock.patch.object(self.state, "upload", side_effect=CuddlerError("state_unavailable", status=500)):
+            with self.assertRaises(CuddlerError) as caught:
+                await self.run_job(spec)
+        self.assertEqual(caught.exception.code, "state_unavailable")
+        self.assertIsNone(self.state.job(self.runner.fingerprint(spec)))
+        self.assertEqual(self.transport.calls("POST", "/videos"), [])
+
+    async def test_a_job_made_while_its_record_could_not_be_written_is_collected_next_time(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("queued"))
+        with mock.patch.object(self.state, "update_job", side_effect=CuddlerError("state_unavailable", status=500)):
+            with self.assertRaises(CuddlerError) as caught:
+                await self.run_job()
+        self.assertEqual(caught.exception.code, "state_unavailable")
+        self.transport.routes.clear()
+        self.transport.add("POST", "/videos", status=200, body=fakes.video_job("succeeded"),
+                           headers={"Idempotent-Replayed": "true"})
+        job = await self.run_job()
+        self.assertEqual(job["id"], fakes.VIDEO_ID)
+        self.assertEqual(len({r.headers["Idempotency-Key"] for r in self.transport.calls("POST", "/videos")}), 1)
+
+    async def test_creates_once_and_waits_for_the_result(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("queued"))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("running"))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        job = await self.run_job()
+        self.assertEqual(job["status"], "succeeded")
+        create = self.transport.calls("POST", "/videos")
+        self.assertEqual(len(create), 1)
+        sent = json.loads(create[0].body)
+        self.assertEqual((sent["max_usd"], sent["metadata"]), ("2.000000", {"client": CLIENT_TAG}))
+        self.assertEqual(self.events[0], ("queued", 3))
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["status"], "succeeded")
+
+    async def test_refuses_before_creating_when_over_the_cap(self):
+        self.transport.add("POST", "/videos/estimate", body=fakes.estimate(usd="3.100000", hold="3.162000"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual((caught.exception.code, caught.exception.detail),
+                         ("over_cap", {"hold": "$3.17", "cap": "$2.00"}))
+        self.assertEqual(self.transport.calls("POST", "/videos"), [])
+
+    async def test_the_refusal_shows_the_hold_it_checked_not_the_smaller_estimate(self):
+        self.transport.add("POST", "/videos/estimate", body=fakes.estimate(usd="1.990000", hold="2.030000"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual((caught.exception.code, caught.exception.detail),
+                         ("over_cap", {"hold": "$2.03", "cap": "$2.00"}))
+
+    async def test_a_failure_before_the_create_is_priced_again_next_time(self):
+        self.transport.fail("POST", "/videos/estimate", CuddlerError("network_error"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "network_error")
+        self.transport.routes.clear()
+        self.transport.add("POST", "/videos/estimate", body=fakes.estimate(usd="3.100000", hold="3.162000"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "over_cap")  # not the Platform's invalid_request
+        self.assertEqual(self.transport.calls("POST", "/videos"), [])
+
+    async def test_same_inputs_reuse_the_finished_job_without_paying_again(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        await self.run_job()
+        await self.run_job()
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+        changed_seed = self.spec(seed=2)
+        await self.run_job(changed_seed)
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 2)
+
+    async def test_an_expired_result_is_made_again(self):
+        new_id = "vid_" + "B" * 20
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded", job_id=new_id))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded", output=None))  # its retention ended
+        await self.run_job()
+        job = await self.run_job()
+        self.assertEqual(job["id"], new_id)
+        creates = self.transport.calls("POST", "/videos")
+        self.assertEqual(len(creates), 2)
+        self.assertNotEqual(creates[0].headers["Idempotency-Key"], creates[1].headers["Idempotency-Key"])
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["job_id"], new_id)
+
+    async def test_a_lost_create_response_is_retried_with_the_same_key(self):
+        self.script_estimate()
+        self.transport.fail("POST", "/videos", CuddlerError("network_error"))
+        self.transport.add("POST", "/videos", status=200, body=fakes.video_job("succeeded"),
+                           headers={"Idempotent-Replayed": "true"})
+        job = await self.run_job()
+        self.assertEqual(job["id"], fakes.VIDEO_ID)
+        keys = [request.headers["Idempotency-Key"] for request in self.transport.calls("POST", "/videos")]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(len(set(keys)), 1)
+
+    async def test_a_lost_create_response_then_a_rate_limit_keeps_the_key(self):
+        self.script_estimate()
+        self.transport.fail("POST", "/videos", CuddlerError("network_error"))  # the job was made, its answer lost
+        self.transport.add("POST", "/videos", status=429, body=fakes.error("rate_limited", 429))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "rate_limited")
+        self.transport.routes.clear()
+        self.transport.add("POST", "/videos", status=200, body=fakes.video_job("succeeded"),
+                           headers={"Idempotent-Replayed": "true"})
+        job = await self.run_job()
+        self.assertEqual(job["id"], fakes.VIDEO_ID)
+        self.assertEqual(len({r.headers["Idempotency-Key"] for r in self.transport.calls("POST", "/videos")}), 1)
+
+    async def test_after_giving_up_the_next_run_resumes_with_the_same_key(self):
+        self.script_estimate()
+        self.transport.fail("POST", "/videos", CuddlerError("network_error"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "network_error")
+        first_key = self.transport.calls("POST", "/videos")[0].headers["Idempotency-Key"]
+        self.transport.routes.clear()
+        self.transport.add("POST", "/videos", status=200, body=fakes.video_job("succeeded"))
+        await self.run_job()
+        last = self.transport.calls("POST", "/videos")[-1]
+        self.assertEqual(last.headers["Idempotency-Key"], first_key)
+        self.assertEqual(len(self.transport.calls("POST", "/videos/estimate")), 1)  # resumed, not re-priced
+
+    async def test_a_resumed_create_repeats_the_first_request_exactly(self):
+        frame = MediaInput("first_frame", b"\x89PNG-1", "image", "image/png", "first.png")
+        self.script_estimate()
+        self.transport.add("POST", "/uploads", status=201, body=fakes.upload())
+        self.transport.add("PUT", fakes.PUT_URL, body=b"")
+        self.transport.add("POST", f"/uploads/{fakes.UPLOAD_ID}/complete", body=fakes.upload("ready"))
+        self.transport.fail("POST", "/videos", CuddlerError("network_error"))
+        with self.assertRaises(CuddlerError):
+            await self.run_job(self.spec(media=[frame]))
+        first = self.transport.calls("POST", "/videos")[0]
+        self.transport.routes.clear()
+        self.transport.add("POST", "/videos", status=200, body=fakes.video_job("succeeded"),
+                           headers={"Idempotent-Replayed": "true"})
+        # Meanwhile the limit was raised and the plugin updated: neither may change the request the key carries.
+        with mock.patch("cuddler_plugin.cuddler.jobs.CLIENT_TAG", "comfyui-cuddler/9.9.9"):
+            await self.run_job(self.spec(media=[frame], cap_usd="5.000000"))
+        last = self.transport.calls("POST", "/videos")[-1]
+        self.assertEqual((last.headers["Idempotency-Key"], last.body), (first.headers["Idempotency-Key"], first.body))
+        self.assertEqual(json.loads(last.body)["first_frame"], fakes.UPLOAD_ID)
+
+    async def test_a_resumed_create_never_carries_a_higher_limit_than_the_node(self):
+        self.script_estimate()
+        self.transport.fail("POST", "/videos", CuddlerError("network_error"))
+        with self.assertRaises(CuddlerError):
+            await self.run_job()
+        key = self.transport.calls("POST", "/videos")[0].headers["Idempotency-Key"]
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(self.spec(cap_usd="1.000000"))
+        self.assertEqual((caught.exception.code, caught.exception.detail),
+                         ("over_cap", {"hold": "$2.00", "cap": "$1.00"}))
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 3)  # the first run's three tries, no more
+        row = self.state.job(self.runner.fingerprint(self.spec()))
+        self.assertEqual((row["status"], row["idempotency_key"]), ("submitting", key))  # still collectable
+
+    async def test_a_refused_create_lets_the_next_run_start_over(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=402, body=fakes.error("insufficient_balance", 402))
+        with self.assertRaises(CuddlerError):
+            await self.run_job()
+        self.transport.routes.clear()
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        await self.run_job()
+        keys = [request.headers["Idempotency-Key"] for request in self.transport.calls("POST", "/videos")]
+        self.assertNotEqual(keys[0], keys[1])
+
+    async def test_failed_jobs_are_reported_and_not_reused(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("failed"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual((caught.exception.code, caught.exception.detail["reason"]),
+                         ("job_failed", "The output was blocked."))
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["status"], "failed")
+
+    async def test_an_interrupt_before_the_create_sends_nothing(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("queued"))
+        stopped = lambda: bool(self.transport.calls("POST", "/videos/estimate"))  # stopped while it was priced
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(interrupted=stopped)
+        self.assertEqual(caught.exception.code, "interrupted_before_create")
+        self.assertEqual(self.transport.calls("POST", "/videos"), [])
+
+    async def test_interrupting_a_queued_job_cancels_it(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("queued"))
+        self.transport.add("POST", JOB_URL + "/cancel", body=fakes.video_job("canceled"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(interrupted=self.after_create)
+        self.assertEqual(caught.exception.code, "interrupted_canceled")
+        self.assertEqual(len(self.transport.calls("POST", JOB_URL + "/cancel")), 1)
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["status"], "canceled")
+
+    async def test_interrupting_a_queued_job_that_cannot_be_canceled_leaves_it_to_be_collected_later(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("queued"))
+        self.transport.add("POST", JOB_URL + "/cancel", status=409, body=fakes.error("not_cancelable", 409))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(interrupted=self.after_create)
+        self.assertEqual(caught.exception.code, "interrupted")  # not interrupted_canceled: the job lives on
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["status"], "queued")
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        job = await self.run_job()
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+
+    async def test_interrupting_a_running_job_leaves_it_to_be_collected_later(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("running"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(interrupted=self.after_create)
+        self.assertEqual(caught.exception.code, "interrupted")
+        self.assertEqual(self.transport.calls("POST", JOB_URL + "/cancel"), [])
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        job = await self.run_job()
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+
+    async def test_gives_up_waiting_after_the_limit_but_keeps_the_job(self):
+        self.runner._max_wait = 30
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("running"))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("running"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "wait_timeout")
+        self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["status"], "running")
+
+    async def test_a_long_retry_after_does_not_outlast_the_wait_limit(self):
+        self.runner._max_wait = 30
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("running"))
+        self.transport.add("GET", JOB_URL, status=429, body=fakes.error("rate_limited", 429),
+                           headers={"Retry-After": "3600"})
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "wait_timeout")
+        self.assertLessEqual(self.clock.now, 30)
+
+    async def test_polling_survives_rate_limits(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("running"))
+        self.transport.add("GET", JOB_URL, status=429, body=fakes.error("rate_limited", 429), headers={"Retry-After": "20"})
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        job = await self.run_job()
+        self.assertEqual(job["status"], "succeeded")
+        self.assertGreaterEqual(self.clock.now, 20)
+
+    async def test_media_are_uploaded_and_part_of_the_fingerprint(self):
+        self.script_estimate()
+        self.transport.add("POST", "/uploads", status=201, body=fakes.upload())
+        self.transport.add("PUT", fakes.PUT_URL, body=b"")
+        self.transport.add("POST", f"/uploads/{fakes.UPLOAD_ID}/complete", body=fakes.upload("ready"))
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        frame = MediaInput("first_frame", b"\x89PNG-1", "image", "image/png", "first.png")
+        await self.run_job(self.spec(media=[frame]))
+        sent = json.loads(self.transport.calls("POST", "/videos")[0].body)
+        self.assertEqual(sent["first_frame"], fakes.UPLOAD_ID)
+        other = MediaInput("first_frame", b"\x89PNG-2", "image", "image/png", "first.png")
+        self.assertNotEqual(self.runner.fingerprint(self.spec(media=[frame])),
+                            self.runner.fingerprint(self.spec(media=[other])))
+
+    async def test_concurrent_runs_of_the_same_inputs_create_one_job(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+        await asyncio.gather(self.run_job(), self.run_job())
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+        self.assertEqual(self.runner._locks, {})  # a finished fingerprint keeps no lock
+
+
+class EventLoopTest(unittest.TestCase):
+    """ComfyUI runs every prompt with asyncio.run, so one JobRunner outlives many event loops."""
+
+    def test_runs_of_the_same_inputs_on_a_later_loop_still_wait_for_each_other(self):
+        with tempfile.TemporaryDirectory() as directory:
+            transport = fakes.FakeTransport()
+            runner, _state = make_runner(directory, transport, FakeClock())
+            transport.add("POST", "/videos/estimate", body=fakes.estimate())
+            transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+            transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
+
+            async def prompt():
+                return await asyncio.gather(runner.run(make_spec()), runner.run(make_spec()))
+
+            for _ in range(2):
+                for job in asyncio.run(prompt()):
+                    self.assertEqual(job["id"], fakes.VIDEO_ID)
+            self.assertEqual(len(transport.calls("POST", "/videos")), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
