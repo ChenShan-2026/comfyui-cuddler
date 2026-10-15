@@ -24,7 +24,7 @@ jobs:
           path: plugin
       - uses: actions/checkout@v4
         with:
-          repository: comfyanonymous/ComfyUI
+          repository: Comfy-Org/ComfyUI  # the canonical name; the old one only redirects
           ref: ${{ matrix.comfyui }}
           path: ComfyUI
       - uses: actions/setup-python@v5

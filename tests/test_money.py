@@ -46,6 +46,14 @@ class MoneyTest(unittest.TestCase):
         self.assertEqual(display("-11.941"), "-$11.95")
         self.assertEqual(display("-0"), "$0.00")
 
+    def test_limits_and_balances_round_down(self):
+        self.assertEqual(display("2.005000", down=True), "$2.00")
+        self.assertEqual(display("4.999999", down=True), "$4.99")
+        self.assertEqual(display("0.009900", down=True), "$0.0099")
+        self.assertEqual(display("0.000001", down=True), "$0.00")
+        self.assertEqual(display("-0.000001", down=True), "$0.00")
+        self.assertEqual(display("2.005000"), "$2.01")  # a charge still rounds up
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,11 +50,15 @@ variable (comma separated; `.example.com` covers every name under it) and restar
 - The key is stored in `ComfyUI/user/__cuddler/credentials.json`. ComfyUI never serves files
   from `__` folders over HTTP, and on macOS and Linux the file is readable only by your account.
 - The key is never written to workflows, to image or video metadata, to ComfyUI's settings or to logs.
-- `ComfyUI/user/__cuddler/state.sqlite3` keeps run fingerprints (hashes), idempotency keys, job and
-  upload ids and each run's spending limit for 8 days after their last update, so a crash or a lost
-  connection never creates a second job. It holds no prompts or media.
+- `ComfyUI/user/__cuddler/state.sqlite3` keeps run fingerprints and file hashes, idempotency keys,
+  job and upload ids and each run's spending limit, so a crash or a lost connection never creates a
+  second job or uploads a file twice. It holds no prompts or media. When ComfyUI starts, the plugin
+  deletes job records last updated more than 8 days ago and upload records more than 29 days old
+  (1 hour for an upload that never finished).
 - Every job sent to Cuddler carries the metadata `client: comfyui-cuddler/<version>`, so Cuddler
-  can count jobs made from ComfyUI. Nothing else about you or your machine is sent.
+  can count jobs made from ComfyUI, and every request's User-Agent names the plugin and Python
+  versions. Nothing else about you or your machine is sent. Reference files you upload keep their
+  file names.
 - ComfyUI has no login. Anyone who can open your ComfyUI page can spend with your key, so do not
   expose ComfyUI to a network you do not trust. The per-run limit and your account's daily limit
   cap what can be spent.

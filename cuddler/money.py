@@ -36,11 +36,16 @@ def cap_from_widget(value):
     return from_micros(micros)
 
 
-def display(text):
-    """'$0.66' or '-$1.50' for people. Rounded away from zero, so an amount is never shown smaller than it is."""
+def display(text, *, down=False):
+    """'$0.66' or '-$1.50' for people. A charge is rounded away from zero, so it is never shown smaller than it is.
+
+    `down=True` is for a limit or a balance: rounded toward zero, so it is never shown larger than it is (a hold of
+    $2.006 over a $2.005 limit reads "up to $2.01, above the $2.00 limit", as the web price label writes it).
+    """
     micros = to_micros(text)
+    rounding = ROUND_DOWN if down else ROUND_UP
     amount = Decimal(abs(micros)) / 1_000_000
-    shown = amount.quantize(Decimal("0.0001"), rounding=ROUND_UP)
+    shown = amount.quantize(Decimal("0.0001"), rounding=rounding)
     if shown == 0 or shown >= Decimal("0.01"):
-        shown = amount.quantize(Decimal("0.01"), rounding=ROUND_UP)
-    return f"{'-' if micros < 0 else ''}${shown}"
+        shown = amount.quantize(Decimal("0.01"), rounding=rounding)
+    return f"{'-' if micros < 0 and shown else ''}${shown}"

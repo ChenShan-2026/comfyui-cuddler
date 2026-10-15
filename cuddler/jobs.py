@@ -153,7 +153,7 @@ class JobRunner:
             key = row["idempotency_key"]
             if to_micros(added["max_usd"]) > to_micros(spec.cap_usd):
                 raise CuddlerError("over_cap", detail={"hold": display(added["max_usd"]),
-                                                       "cap": display(spec.cap_usd)})
+                                                       "cap": display(spec.cap_usd, down=True)})
         if interrupted():
             raise CuddlerError("interrupted_before_create")  # nothing that costs money was sent
         if key is None:
@@ -184,7 +184,7 @@ class JobRunner:
             # The Platform refuses when the hold (the most a job can be charged) is above max_usd, so
             # show the hold: the estimate can sit under the limit while the hold is over it.
             raise CuddlerError("over_cap", detail={"hold": display(quote["hold_usd"]),
-                                                   "cap": display(spec.cap_usd)})
+                                                   "cap": display(spec.cap_usd, down=True)})
         added["max_usd"] = spec.cap_usd
         added["metadata"] = {"client": CLIENT_TAG}
         return added

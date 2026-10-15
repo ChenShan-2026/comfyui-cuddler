@@ -176,7 +176,7 @@ class Handlers:
         except CuddlerError as error:
             return {"balance_error": {"code": error.code, "message": describe(error, language)}}
         shown = {name: balance[name] for name in BALANCE_FIELDS}
-        shown["available_display"] = display(balance["available_usd"])
+        shown["available_display"] = display(balance["available_usd"], down=True)  # never more than there is
         if generation == self._generation:
             self._balance = (self._clock() + BALANCE_TTL, shown)
         return {"balance": shown}

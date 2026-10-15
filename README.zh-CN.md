@@ -38,8 +38,8 @@ Cuddler 公开模型目录里的全部模型都可以通过这四个节点使用
 
 - key 保存在 `ComfyUI/user/__cuddler/credentials.json`。ComfyUI 不会通过网页接口提供 `__` 开头文件夹里的文件；在 macOS 和 Linux 上，这个文件只有你的账户能读。
 - key 不会写进工作流、图片或视频的元数据、ComfyUI 的设置或日志。
-- `ComfyUI/user/__cuddler/state.sqlite3` 保存运行指纹（哈希值）、幂等键、任务和上传 ID 以及每次运行的花费上限，在最后一次更新后保留 8 天。这样即使崩溃或断网，也不会重复创建任务。这里不保存提示词和素材。
-- 发给 Cuddler 的每个任务都带有元数据 `client: comfyui-cuddler/<版本号>`，用来统计从 ComfyUI 发起的任务数量。除此之外，不会发送任何关于你或你电脑的信息。
+- `ComfyUI/user/__cuddler/state.sqlite3` 保存运行指纹和文件的哈希值、幂等键、任务和上传 ID 以及每次运行的花费上限，这样即使崩溃或断网，也不会重复创建任务或重复上传文件。这里不保存提示词和素材。ComfyUI 启动时，插件会删除最后一次更新已超过 8 天的任务记录和超过 29 天的上传记录（没有传完的上传超过 1 小时即删除）。
+- 发给 Cuddler 的每个任务都带有元数据 `client: comfyui-cuddler/<版本号>`，用来统计从 ComfyUI 发起的任务数量；每个请求的 User-Agent 里写有插件和 Python 的版本号。除此之外，不会发送任何关于你或你电脑的信息。上传的参考素材会带上它的文件名。
 - ComfyUI 本身没有登录功能。能打开你 ComfyUI 页面的人都能用你的 key 花钱，所以不要把 ComfyUI 开放到不可信的网络上。单次花费上限和账户的每日上限会限制最多能花多少。
 - 如果 ComfyUI 运行在另一台机器上，在设置页填写的 key 会经过网络传过去。这种情况建议改用 `CUDDLER_API_KEY`。
 
