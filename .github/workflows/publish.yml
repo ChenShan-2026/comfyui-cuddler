@@ -1,0 +1,35 @@
+name: publish
+
+# The Comfy Registry's own flow: a pyproject.toml change on main publishes it.
+# Versions below 1.0.0 never publish, and nothing publishes until the
+# REGISTRY_ACCESS_TOKEN secret exists.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    if: github.repository == 'CuddlerAI/comfyui-cuddler'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish only from 1.0.0 on
+        id: gate
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          echo "pyproject version: $version"
+          case "$version" in
+            0.*) echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Publish to the Comfy Registry
+        if: steps.gate.outputs.publish == 'true'
+        uses: Comfy-Org/publish-node-action@d2366e7abb6ab16f3bb03e3520ae25c8cf749bc9 # main on 2025-05-10
+        with:
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

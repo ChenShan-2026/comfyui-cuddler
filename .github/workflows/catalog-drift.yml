@@ -1,0 +1,23 @@
+name: catalog-drift
+
+# Once a day: can this version show every model in the live catalog? Read-only, no key.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the live catalog
+        env:
+          CUDDLER_LIVE_CATALOG: "1"
+        run: python -m unittest tests.test_catalog_live -v

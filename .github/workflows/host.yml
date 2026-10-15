@@ -1,0 +1,51 @@
+name: host
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comfyui:
+    name: ComfyUI ${{ matrix.comfyui }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest version the Registry entry allows (requires-comfyui) and the newest release.
+        comfyui: [v0.14.0, v0.40.0]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: comfyanonymous/ComfyUI
+          ref: ${{ matrix.comfyui }}
+          path: ComfyUI
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ComfyUI for CPU and a browser
+        run: |
+          python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r ComfyUI/requirements.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Install the plugin and the test bootstrap
+        run: |
+          rsync -a --exclude .git --exclude tests plugin/ ComfyUI/custom_nodes/cuddler/
+          cp -R plugin/tests/host/bootstrap ComfyUI/custom_nodes/zz_cuddler_host_test
+      - name: Start ComfyUI
+        run: |
+          cd ComfyUI
+          nohup python main.py --cpu --listen 127.0.0.1 --port 8188 > ../comfyui.log 2>&1 &
+          python ../plugin/tests/host/wait_for_server.py http://127.0.0.1:8188 300
+      - run: python plugin/tests/host/check_host.py --base http://127.0.0.1:8188 --user-dir ComfyUI/user
+      - run: python plugin/tests/host/check_browser.py --base http://127.0.0.1:8188
+      - name: ComfyUI log
+        if: always()
+        run: tail -n 200 comfyui.log
