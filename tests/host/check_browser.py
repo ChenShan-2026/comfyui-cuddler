@@ -1,0 +1,72 @@
+"""Browser check: the Cuddler settings panel works inside the real ComfyUI page.
+
+    python tests/host/check_browser.py --base http://127.0.0.1:8188 [--channel chrome]
+
+Needs `pip install playwright` and, without --channel, `python -m playwright install chromium`.
+"""
+import argparse
+import json
+import sys
+
+from playwright.sync_api import sync_playwright
+
+KEY = "cud_sk_live_" + "B" * 24
+PANEL = "#cuddler-check"
+RENDER = """() => {
+  const extension = window.app.extensions.find((item) => item.name === "Cuddler.Platform");
+  const panel = extension.settings[0].type("Cuddler.Account", () => {}, "", {});
+  panel.id = "cuddler-check";
+  document.body.appendChild(panel);
+}"""
+
+
+def fill(page, selector, value):
+    # Act on the panel directly: ComfyUI may show a welcome dialog that covers the page on first start.
+    page.evaluate("([selector, value]) => { const input = document.querySelector(selector); input.value = value;"
+                  " input.dispatchEvent(new Event('input', { bubbles: true })); }", [selector, value])
+
+
+def click(page, selector):
+    page.evaluate("(selector) => document.querySelector(selector).click()", selector)
+
+
+def text_includes(selector, text):
+    return f"() => (document.querySelector({json.dumps(selector)})?.textContent || '').includes({json.dumps(text)})"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--channel", default=None, help="use an installed browser, e.g. chrome")
+    args = parser.parse_args()
+    errors = []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel=args.channel) if args.channel else playwright.chromium.launch()
+        page = browser.new_page()
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(args.base, wait_until="domcontentloaded")
+        page.wait_for_function("() => Array.isArray(window.app?.extensions) && "
+                               "window.app.extensions.some((item) => item.name === 'Cuddler.Platform')",
+                               timeout=120_000)
+        page.evaluate(RENDER)
+        page.wait_for_function(text_includes(f"{PANEL} [data-cuddler=status]", "key"), timeout=30_000)
+        fill(page, f"{PANEL} [data-cuddler=key]", KEY)
+        click(page, f"{PANEL} [data-cuddler=save]")
+        page.wait_for_function(text_includes(f"{PANEL} [data-cuddler=status]", "BBBB"), timeout=30_000)
+        page.wait_for_function(text_includes(f"{PANEL} [data-cuddler=balance]", "12.34"), timeout=30_000)
+        settings = page.evaluate("() => fetch('/api/settings').then((response) => response.json())")
+        click(page, f"{PANEL} [data-cuddler=remove]")
+        page.wait_for_function(f"() => !({text_includes(f'{PANEL} [data-cuddler=status]', 'BBBB')})()",
+                               timeout=30_000)
+        browser.close()
+    leaked = KEY in json.dumps(settings)
+    own_errors = [error for error in errors if "cuddler" in error.lower()]
+    if leaked or own_errors:
+        print(f"FAIL key in ComfyUI settings: {leaked}; page errors: {own_errors}")
+        return 1
+    print("PASS the settings panel saved and removed a key; the key never reached ComfyUI's settings")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
