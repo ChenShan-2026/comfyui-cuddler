@@ -93,6 +93,10 @@ npm test
 
 Before a release, refresh the bundled model list with `python scripts/export_catalog_snapshot.py`.
 
+For operator acceptance, follow [the video acceptance runbook](docs/acceptance/video-paid.md).
+Its preflight reads the catalog, balance and estimate only. Real generation and settlement require
+the recorded budget approval and separate evidence; host CI does not replace that acceptance.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

@@ -62,6 +62,9 @@ npm test
 
 发版前运行 `python scripts/export_catalog_snapshot.py`，更新插件自带的模型目录。
 
+实际验收按[视频验收操作步骤](docs/acceptance/video-paid.md)执行。预检只读取目录、余额和估价；
+真实生成与结算需要先登记预算批准并另留证据，宿主 CI 不能替代该验收。
+
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
