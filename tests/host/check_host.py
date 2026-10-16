@@ -3,13 +3,16 @@
     python tests/host/check_host.py --base http://127.0.0.1:8188 --user-dir ComfyUI/user
 """
 import argparse
+import io
 import json
 import os
 from pathlib import Path
 import stat
 import sys
+import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 KEY = "cud_sk_live_" + "A" * 24
 
@@ -28,6 +31,33 @@ def call(base, method, path, body=None, *, origin=None, site=None):
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
+
+
+def run_video(base, selection, *, audio=False):
+    """Submit the real host's flat DynamicCombo API inputs, then wait for SaveVideo."""
+    inputs = {"model": selection, "model.duration": 4, "model.resolution": "720p",
+              "model.aspect_ratio": "16:9", "prompt": "offline host integration", "seed": 1729, "max_usd": 2.0}
+    if audio:
+        inputs["model.generate_audio"] = False
+    workflow = {
+        "1": {"class_type": "CuddlerVideo", "inputs": inputs},
+        "2": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0], "filename_prefix": "cuddler-host-test/video",
+                                                   "format": "auto", "codec": "auto"}},
+    }
+    status, raw = call(base, "POST", "/prompt", {"prompt": workflow, "client_id": "cuddler-host-test"})
+    if status != 200 or "prompt_id" not in json.loads(raw):
+        raise AssertionError(f"host rejected the workflow: {status} {raw[:500]!r}")
+    prompt_id = json.loads(raw)["prompt_id"]
+    end = time.monotonic() + 45
+    while time.monotonic() < end:
+        status, raw = call(base, "GET", "/history/" + prompt_id)
+        history = json.loads(raw).get(prompt_id) if status == 200 else None
+        if history:
+            if history.get("status", {}).get("status_str") != "success":
+                raise AssertionError(f"host execution failed: {str(history.get('status'))[:1000]}")
+            return history["outputs"]["2"]["images"][0]
+        time.sleep(0.2)
+    raise AssertionError("CuddlerVideo → SaveVideo did not finish within 45 seconds")
 
 
 def main():
@@ -76,6 +106,36 @@ def main():
     status, body = call(base, "POST", "/api/cuddler/key", {"key": KEY}, origin="http://evil.example",
                         site="cross-site")
     check("another site cannot set the key", status == 403, str(status).encode())
+
+    status, body = call(base, "GET", "/object_info/CuddlerVideo")
+    node = json.loads(body).get("CuddlerVideo", {}) if status == 200 else {}
+    check("CuddlerVideo is registered with a native VIDEO output", node.get("output") == ["VIDEO"], body)
+    try:
+        dynamic = node["input"]["required"]["model"][1]["options"]
+        option = next(option for option in dynamic if
+                      "(seedance-2.5) / Text to video / default" in option["key"])
+        check("the actual host exposes the text-video DynamicCombo", True)
+        nested = option["inputs"].get("required", {})
+        before = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+        for _ in range(2):
+            saved = run_video(base, option["key"], audio="generate_audio" in nested)
+            status, media = call(base, "GET", "/view?" + urllib.parse.urlencode(saved))
+            # Decode the file saved by native SaveVideo, rather than accepting
+            # a synthetic VIDEO-shaped Python object as host compatibility.
+            import av
+            with av.open(io.BytesIO(media)) as container:
+                frame = next(container.decode(video=0))
+                check("CuddlerVideo → SaveVideo produces a downloadable decoded MP4",
+                      status == 200 and (frame.width, frame.height) == (16, 16))
+        after = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+        check("running the same inputs twice creates exactly one fake paid task",
+              after["creates"] - before["creates"] == 1, json.dumps(after).encode())
+        check("the second run executes recovery and downloads the retained result",
+              after["downloads"] - before["downloads"] == 2, json.dumps(after).encode())
+        check("all workflow requests used the offline Platform fixture", after["unexpected"] == 0,
+              json.dumps(after).encode())
+    except Exception as error:
+        check("the real VIDEO workflow completes", False, str(error).encode())
 
     status, body = call(base, "DELETE", "/api/cuddler/key", **page)
     check("the key can be removed",
