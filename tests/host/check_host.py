@@ -172,7 +172,7 @@ def dynamic_defaults(option):
     return result
 
 
-def run_advanced_video(base, options, model_id, mode_label, *, last=False):
+def run_advanced_video(base, options, model_id, mode_label, *, last=False, untrimmed=False):
     option = next(item for item in options if f"({model_id}) / {mode_label} /" in item["key"])
     inputs = {**dynamic_defaults(option), "prompt": "Offline native media test", "max_usd": 2.0, "seed": 3101}
     prefix = "model."
@@ -183,7 +183,7 @@ def run_advanced_video(base, options, model_id, mode_label, *, last=False):
         if mode_label not in {"Extend video", "Video reference"}:
             inputs[prefix + "reference_images.image0"] = ["3", 0]
         if mode_label != "Image reference":
-            inputs[prefix + "reference_videos.video0"] = ["3", 2]
+            inputs[prefix + "reference_videos.video0"] = ["3", 4 if untrimmed else 2]
         if mode_label == "Reference to video":
             inputs[prefix + "reference_audios.audio0"] = ["3", 3]
     if last:
@@ -334,6 +334,8 @@ def main():
     try:
         check("requested last frame → native IMAGE → SaveImage",
               run_advanced_video(base, dynamic, "seedance-2.5", "First frame to video", last=True))
+        check("untrimmed video container metadata is stripped before upload",
+              run_advanced_video(base, dynamic, "seedance-2.5", "Reference to video", untrimmed=True))
         run_long_dialogue(base)
         stats = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
         check("50-turn dialogue survives native host input packing", stats["long_dialogues"] == 1)

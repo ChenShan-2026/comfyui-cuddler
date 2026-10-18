@@ -70,6 +70,30 @@ def main():
             workflow = page.evaluate("() => window.__cuddlerCheckNode.serialize()")
             if KEY in json.dumps(workflow):
                 raise AssertionError("the API key reached a workflow")
+            if node_id == "CuddlerVideo":
+                page.evaluate("""() => {
+                  const node = window.__cuddlerCheckNode;
+                  const model = node.widgets.find(w => w.name === 'model');
+                  const choice = model.options.values.find(v => v.includes('(seedance-2.5) / Reference to video /'));
+                  if (!choice) throw new Error('Cuddler reference selector missing');
+                  model.value = choice;
+                  model.callback(choice);
+                }""")
+                page.wait_for_function("() => window.__cuddlerCheckNode.inputs.some(i => i.name === 'model.reference_images.image0')")
+                page.evaluate("""() => {
+                  const source = window.LiteGraph.createNode('CuddlerHostMediaFixture');
+                  window.app.graph.add(source);
+                  window.__cuddlerCheckSource = source;
+                  const node = window.__cuddlerCheckNode;
+                  source.connect(0, node, node.inputs.findIndex(i => i.name === 'model.reference_images.image0'));
+                  source.connect(2, node, node.inputs.findIndex(i => i.name === 'model.reference_videos.video0'));
+                }""")
+                page.wait_for_function("() => window.__cuddlerCheckNode.inputs.some(i => i.name === 'model.reference_images.image1')")
+                page.wait_for_function("() => window.__cuddlerCheckNode.widgets.some(w => typeof w.value === 'string' && w.value.includes('Starting price'))")
+                workflow = page.evaluate("() => window.__cuddlerCheckNode.serialize()")
+                if KEY in json.dumps(workflow):
+                    raise AssertionError('the API key reached an advanced workflow')
+                page.evaluate("() => window.app.graph.remove(window.__cuddlerCheckSource)")
             page.evaluate("() => window.app.graph.remove(window.__cuddlerCheckNode)")
         settings = page.evaluate("() => fetch('/api/settings').then((response) => response.json())")
         click(page, f"{PANEL} [data-cuddler=remove]")
@@ -81,7 +105,7 @@ def main():
     if leaked or own_errors:
         print(f"FAIL key in ComfyUI settings: {leaked}; page errors: {own_errors}")
         return 1
-    print("PASS settings and all four price labels work; the key never reached settings or a workflow")
+    print("PASS settings, four price labels, reference mode and Autogrow work; no key in settings or workflow")
     return 0
 
 

@@ -20,6 +20,7 @@ class BoundedBuffer(io.BytesIO):
 
 def video_mp4(video):
     import av
+    from comfy_api.latest import Types
 
     try:
         seconds = float(video.get_duration())
@@ -30,7 +31,7 @@ def video_mp4(video):
             raise CuddlerError("invalid_request")
         source = BoundedBuffer(200 * 1024 * 1024)
         # save_to honours native trim ranges; get_stream_source does not.
-        video.save_to(source, format="mp4")
+        video.save_to(source, format=Types.VideoContainer.MP4)
         source.seek(0)
         output = BoundedBuffer(200 * 1024 * 1024)
         with av.open(source) as container, av.open(output, "w", format="mp4") as target:

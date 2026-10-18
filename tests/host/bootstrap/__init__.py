@@ -47,7 +47,7 @@ def _video_bytes(*, size=16, seconds=1, rate=4, metadata=False):
 
 class NativeMediaFixture:
     """Real native inputs; only present in the host-test bootstrap, never the package."""
-    RETURN_TYPES = ("IMAGE", "IMAGE", "VIDEO", "AUDIO")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "VIDEO", "AUDIO", "VIDEO")
     FUNCTION = "execute"
     CATEGORY = "test"
     _clip = None
@@ -63,7 +63,8 @@ class NativeMediaFixture:
             type(self)._clip = _video_bytes(size=720, seconds=6, rate=24, metadata=True)
         return (torch.full((1, 720, 720, 3), 0.2), torch.full((1, 720, 720, 3), 0.6),
                 InputImpl.VideoFromFile(io.BytesIO(self._clip), start_time=1, duration=4),
-                {"waveform": torch.zeros(1, 1, 64000), "sample_rate": 16000})
+                {"waveform": torch.zeros(1, 1, 64000), "sample_rate": 16000},
+                InputImpl.VideoFromFile(io.BytesIO(self._clip)))
 
 
 NODE_CLASS_MAPPINGS["CuddlerHostMediaFixture"] = NativeMediaFixture
@@ -144,7 +145,7 @@ class FakePlatform:
                         if upload["kind"] == "video":
                             stream = container.streams.video[0]
                             duration = float(stream.duration * stream.time_base)
-                            if abs(duration - 4) > 0.05 or "comment" in container.metadata:
+                            if not any(abs(duration - expected) < 0.05 for expected in (4, 6)) or "comment" in container.metadata:
                                 return self._refuse()
                         else:
                             frame = next(container.decode(audio=0))
@@ -172,7 +173,7 @@ class FakePlatform:
             if set(body) & {"prompt", "seed", "task_type", "return_last_frame", "camera_fixed", "reference_videos"}:
                 return self._refuse()
             if "input_video_seconds" in body:
-                if abs(body["input_video_seconds"] - 4) > 0.05:
+                if not any(abs(body["input_video_seconds"] - expected) < 0.05 for expected in (4, 6)):
                     return self._refuse()
                 self.precise_video_quotes += 1
             return self._json(200, ESTIMATE)
