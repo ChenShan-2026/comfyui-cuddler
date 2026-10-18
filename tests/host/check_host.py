@@ -72,6 +72,10 @@ def run_video(base, selection, *, audio=False, first_frame=None, seed=1729):
     if first_frame:
         inputs["model.first_frame"] = ["3", 0]
         workflow["3"] = {"class_type": "LoadImage", "inputs": {"image": first_frame}}
+    return run_workflow(base, workflow)["images"][0]
+
+
+def run_workflow(base, workflow):
     status, raw = call(base, "POST", "/prompt", {"prompt": workflow, "client_id": "cuddler-host-test"})
     if status != 200 or "prompt_id" not in json.loads(raw):
         raise AssertionError(f"host rejected the workflow: {status} {raw[:500]!r}")
@@ -83,9 +87,55 @@ def run_video(base, selection, *, audio=False, first_frame=None, seed=1729):
         if history:
             if history.get("status", {}).get("status_str") != "success":
                 raise AssertionError(f"host execution failed: {str(history.get('status'))[:1000]}")
-            return history["outputs"]["2"]["images"][0]
+            return history["outputs"]["2"]
         time.sleep(0.2)
-    raise AssertionError("CuddlerVideo → SaveVideo did not finish within 45 seconds")
+    raise AssertionError("the native-output workflow did not finish within 45 seconds")
+
+
+def run_creative(base, node_id, *, reference=None):
+    node = json.loads(call(base, "GET", "/object_info/" + node_id)[1])[node_id]
+    inputs = {"seed": 2201, "max_usd": 2.0}
+    model = node["input"]["required"]["model"]
+    if node_id == "CuddlerMusic":
+        inputs.update(model=model[0][0], prompt="Original instrumental")
+    else:
+        options = model[1]["options"]
+        option = (next(item for item in options if (" / reference / " if reference else " / text / ") in item["key"])
+                  if node_id == "CuddlerImage" else options[0])
+        inputs["model"] = option["key"]
+        required = option["inputs"]["required"]
+        if node_id == "CuddlerImage":
+            inputs.update(prompt="An orange ball", **{
+                "model.resolution": required["resolution"][0][0],
+                "model.aspect_ratio": required["aspect_ratio"][0][0]})
+        else:
+            inputs.update({"model.voice_id": required["voice_id"][0][0], "model.text": "Hello world."})
+            if "second_speaker" in required:
+                inputs.update({"model.second_speaker": True,
+                               "model.voice_id_2": required["voice_id_2"][0][-1],
+                               "model.text_2": "Hello again."})
+    image = node_id == "CuddlerImage"
+    workflow = {
+        "1": {"class_type": node_id, "inputs": inputs},
+        "2": {"class_type": "SaveImage" if image else "SaveAudio", "inputs": {
+            "images" if image else "audio": ["1", 0], "filename_prefix": "cuddler-host-test/" + node_id}},
+    }
+    if reference:
+        inputs["model.references.image0"] = ["3", 0]
+        workflow["3"] = {"class_type": "LoadImage", "inputs": {"image": reference}}
+    output = run_workflow(base, workflow)
+    saved = output["images" if image else "audio"][0]
+    status, media = call(base, "GET", "/view?" + urllib.parse.urlencode(saved))
+    if status != 200:
+        return False
+    if image:
+        from PIL import Image
+        with Image.open(io.BytesIO(media)) as decoded:
+            return decoded.size == (16, 16) and decoded.mode == "RGB"
+    import av
+    with av.open(io.BytesIO(media)) as decoded:
+        frame = next(decoded.decode(audio=0))
+        return frame.sample_rate == 16000 and len(frame.layout.channels) == 1
 
 
 def decoded_video(base, saved):
@@ -198,6 +248,26 @@ def main():
               reused["unexpected"] == 0, json.dumps(reused).encode())
     except Exception as error:
         check("the real first-frame VIDEO workflow completes", False, str(error).encode())
+
+    for node_id, native in (("CuddlerImage", "IMAGE"), ("CuddlerSpeech", "AUDIO"), ("CuddlerMusic", "AUDIO")):
+        try:
+            node = json.loads(call(base, "GET", "/object_info/" + node_id)[1]).get(node_id, {})
+            check(node_id + " exposes native " + native, node.get("output") == [native])
+            before = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+            for _ in range(2):
+                check(node_id + " saves playable media", run_creative(base, node_id))
+            after = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+            check(node_id + " recovers one task for two executions",
+                  after["creates"] - before["creates"] == 1 and after["downloads"] - before["downloads"] == 2,
+                  json.dumps(after).encode())
+        except Exception as error:
+            check(node_id + " native workflow completes", False, str(error).encode())
+    try:
+        check("LoadImage → CuddlerImage references → SaveImage", run_creative(base, "CuddlerImage", reference=upload_first_frame(base)))
+        after = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+        check("all four nodes stayed on the offline fixture", after["unexpected"] == 0, json.dumps(after).encode())
+    except Exception as error:
+        check("the image reference workflow completes", False, str(error).encode())
 
     status, body = call(base, "DELETE", "/api/cuddler/key", **page)
     check("the key can be removed",

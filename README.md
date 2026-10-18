@@ -2,7 +2,8 @@
 
 > **In development.** This plugin is not on the Comfy Registry yet. Version 1.0 adds the
 > Cuddler Video, Image, Speech and Music nodes. The current preview adds text and first-frame
-> video generation; other video modes and the Image, Speech and Music nodes are still in development.
+> video generation, plus image, speech and music nodes. Other video modes and paid release
+> acceptance are still in development. This preview is not a completed 1.0 release.
 
 [中文说明](README.zh-CN.md)
 
@@ -32,6 +33,20 @@ implemented modes are listed; reference-video, editing and other modes are not i
 The selector and parameters come from the catalog. A model listed publicly may still be unavailable
 to your organization; the authenticated estimate and create request enforce access and spending limits.
 Save the workflow with a fixed seed to recover the same operation after a restart.
+
+## Image and audio preview
+
+- **Cuddler Image:** choose a catalog model, mode and variant. Reference/edit modes accept
+  connected IMAGE inputs from Load Image, up to the selected model's limit. Connect IMAGE to Save Image.
+- **Cuddler Speech:** choose a model and voice, then enter the text. Dialogue models also offer
+  an optional second speaker. Connect AUDIO to Save Audio. The price estimate sends the entered
+  text to Cuddler because speech is metered by text and voice.
+- **Cuddler Music:** choose a model and prompt, then connect AUDIO to Save Audio.
+
+Image results are decoded as RGB; audio results use the source sample rate and one or two channels.
+Downloads are bounded to 30 MiB / 32 million pixels for images and 50 MiB / 10 minutes for audio.
+An invalid or oversized result stops the node. Re-running retains the original job instead of paying
+for a replacement. The seed identifies the local operation even when a model does not accept a seed.
 
 ## Add your API key
 

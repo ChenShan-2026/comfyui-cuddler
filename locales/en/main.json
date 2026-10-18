@@ -19,6 +19,42 @@
           "name": "Seed"
         }
       }
+    },
+    "CuddlerImage": {
+      "display_name": "Cuddler Image",
+      "description": "Generate an image; connect IMAGE to Save Image.",
+      "inputs": {
+        "max_usd": {
+          "name": "Spending limit (USD)"
+        },
+        "seed": {
+          "name": "Seed"
+        }
+      }
+    },
+    "CuddlerSpeech": {
+      "display_name": "Cuddler Speech",
+      "description": "Generate speech; dialogue models support a second speaker. Connect AUDIO to Save Audio.",
+      "inputs": {
+        "max_usd": {
+          "name": "Spending limit (USD)"
+        },
+        "seed": {
+          "name": "Seed"
+        }
+      }
+    },
+    "CuddlerMusic": {
+      "display_name": "Cuddler Music",
+      "description": "Generate music; connect AUDIO to Save Audio.",
+      "inputs": {
+        "max_usd": {
+          "name": "Spending limit (USD)"
+        },
+        "seed": {
+          "name": "Seed"
+        }
+      }
     }
   }
 }

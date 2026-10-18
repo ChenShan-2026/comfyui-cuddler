@@ -69,7 +69,10 @@ def comfy_stubs(user_dir):
         ComfyNode=ComfyNode, Schema=Schema, NodeOutput=NodeOutput,
         Int=types.SimpleNamespace(Input=Input), Float=types.SimpleNamespace(Input=Input),
         String=types.SimpleNamespace(Input=Input), Combo=types.SimpleNamespace(Input=Input),
-        Boolean=types.SimpleNamespace(Input=Input), Image=types.SimpleNamespace(Input=Input),
+        Boolean=types.SimpleNamespace(Input=Input), Image=types.SimpleNamespace(Input=Input, Output=lambda: "IMAGE"),
+        Audio=types.SimpleNamespace(Output=lambda: "AUDIO"),
+        Autogrow=types.SimpleNamespace(Input=lambda id, template, **kw: Input(id, template=template, **kw),
+            TemplatePrefix=lambda input, **kw: types.SimpleNamespace(input=input, **kw)),
         Video=types.SimpleNamespace(Output=lambda: "VIDEO"),
         DynamicCombo=types.SimpleNamespace(Input=Input, Option=Option),
         ControlAfterGenerate=types.SimpleNamespace(fixed="fixed"),
@@ -127,7 +130,8 @@ class EntrypointTest(unittest.TestCase):
             extension = asyncio.run(module.comfy_entrypoint())
             self.assertIsInstance(extension, sys.modules["comfy_api.latest"].ComfyExtension)
             nodes = asyncio.run(extension.get_node_list())
-            self.assertEqual([node.__name__ for node in nodes], ["CuddlerVideo"])
+            self.assertEqual([node.__name__ for node in nodes],
+                             ["CuddlerVideo", "CuddlerImage", "CuddlerSpeech", "CuddlerMusic"])
             with self.assertLogs("cuddler", level="WARNING") as logs:
                 asyncio.run(extension.on_load())
                 for thread in threading.enumerate():

@@ -43,6 +43,24 @@ def _video_bytes():
     return target.getvalue()
 
 
+def _image_bytes():
+    from PIL import Image
+    target = io.BytesIO()
+    Image.new("RGB", (16, 16), (32, 96, 160)).save(target, format="PNG")
+    return target.getvalue()
+
+
+def _audio_bytes():
+    import wave
+    target = io.BytesIO()
+    with wave.open(target, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\x00\x00" * 1600)
+    return target.getvalue()
+
+
 def _plugin():
     suffix = os.path.join("custom_nodes", "cuddler", "__init__.py")
     for name, module in list(sys.modules.items()):
@@ -56,6 +74,7 @@ class FakePlatform:
         self._response = response_class
         self._catalog = catalog
         self._media = _video_bytes()
+        self._creative_media = {"image": _image_bytes(), "speech": _audio_bytes(), "music": _audio_bytes()}
         self.jobs = {}
         self.uploads, self.upload_keys, self.uploaded = {}, {}, set()
         self.creates = self.downloads = self.unexpected = 0
@@ -101,6 +120,31 @@ class FakePlatform:
             return self._json(200, BALANCE)
         if (request.method, path) == ("POST", "/videos/estimate"):
             return self._json(200, ESTIMATE)
+        for kind, endpoint, prefix in (("image", "images", "img"), ("speech", "speech", "aud"),
+                                       ("music", "music", "mus")):
+            estimate = {**ESTIMATE, "object": kind + "_estimate"}
+            if (request.method, path) == ("POST", f"/{endpoint}/estimate"):
+                return self._json(200, estimate)
+            if (request.method, path) == ("POST", f"/{endpoint}"):
+                self.create_requests += 1
+                key = request.headers.get("Idempotency-Key")
+                if not key:
+                    return self._refuse()
+                body = json.loads(request.body)
+                for upload_id in body.get("reference_images", []):
+                    if self.uploads.get(upload_id, {}).get("status") != "ready":
+                        return self._refuse()
+                if key not in self.jobs:
+                    self.creates += 1
+                    self.jobs[key] = {"object": kind, "id": prefix + "_" + f"{self.creates:020d}",
+                        "model": body["model"], "status": "succeeded", "estimate": estimate,
+                        "output": {"url": OUTPUT + "/" + kind, "retained_until": "2099-01-01T00:00:00Z"},
+                        "error": None}
+                return self._json(200, self.jobs[key])
+            if request.method == "GET" and path.startswith(f"/{endpoint}/"):
+                job = next((job for job in self.jobs.values() if path == f"/{endpoint}/" + job["id"]), None)
+                if job:
+                    return self._json(200, job)
         if (request.method, path) == ("POST", "/uploads"):
             self.upload_requests += 1
             key = request.headers.get("Idempotency-Key")
@@ -157,6 +201,13 @@ class FakePlatform:
         return self._json(404, {"code": "not_found", "message": "not faked", "request_id": "req_fake"})
 
     def stream(self, request, sink):
+        for kind, media in self._creative_media.items():
+            if request.method == "GET" and request.url == OUTPUT + "/" + kind:
+                if not self._media_headers_safe(request):
+                    return self._refuse()
+                self.downloads += 1
+                sink.write(media)
+                return self._response(200, {}, b"")
         if request.method == "GET" and request.url == OUTPUT:
             if not self._media_headers_safe(request):
                 return self._refuse()

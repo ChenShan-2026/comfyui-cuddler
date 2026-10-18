@@ -1,4 +1,4 @@
-// Only model/price controls leave the browser. Prompts, seeds, images and keys never enter estimates.
+// Video estimates contain only model/price controls. Other kinds supply their own request builder.
 import { createPriceUpdater } from "./price.js";
 
 function widget(node, name) {
@@ -18,7 +18,8 @@ export function estimateFor(node, choices) {
 }
 
 export function mountVideoPrice(node, { client, t, choices, repeat = setInterval, stop = clearInterval,
-  now = Date.now, updaterFactory = createPriceUpdater, keyEvents = globalThis }) {
+  now = Date.now, updaterFactory = createPriceUpdater, keyEvents = globalThis,
+  kind = "video", estimate = estimateFor }) {
   const label = node.addWidget("text", t("priceLabel"), t("priceNeedsKey"), () => {}, { serialize: false });
   label.disabled = true;
   let signature;
@@ -30,7 +31,7 @@ export function mountVideoPrice(node, { client, t, choices, repeat = setInterval
   } });
   const refresh = () => {
     if (disposed) return;
-    const request = estimateFor(node, choices);
+    const request = estimate(node, choices);
     if (!request) return;
     const next = JSON.stringify(request);
     // DynamicCombo replaces its widgets after a selection change. Read the current controls each
@@ -38,7 +39,7 @@ export function mountVideoPrice(node, { client, t, choices, repeat = setInterval
     if (next !== signature || now() - refreshed >= 60_000) {
       signature = next;
       refreshed = now();
-      updater.request("video", request.body, request.cap);
+      updater.request(kind, request.body, request.cap);
     }
   };
   const timer = repeat(refresh, 500);

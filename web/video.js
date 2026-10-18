@@ -3,13 +3,17 @@ import { api } from "../../scripts/api.js";
 import { createClient } from "./lib/client.js";
 import { createStrings } from "./lib/i18n.js";
 import { mountVideoPrice } from "./lib/video-price.js";
+import { imageEstimate, speechEstimate, musicEstimate } from "./lib/creative-price.js";
 
 const client = createClient((path, init) => api.fetchApi(path, init));
 
 app.registerExtension({
   name: "Cuddler.Video",
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== "CuddlerVideo") return;
+    const kinds = { CuddlerVideo: ["video", undefined], CuddlerImage: ["image", imageEstimate],
+      CuddlerSpeech: ["speech", speechEstimate], CuddlerMusic: ["music", musicEstimate] };
+    if (!kinds[nodeData.name]) return;
+    const [kind, estimate] = kinds[nodeData.name];
     const choices = nodeData.input?.required?.model?.[1]?.cuddler_choices ?? {};
     const created = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function (...args) {
@@ -17,7 +21,7 @@ app.registerExtension({
       const seed = this.widgets?.find((widget) => widget.name === "seed");
       if (seed) seed.value = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
       const locale = app.extensionManager?.setting?.get?.("Comfy.Locale") || navigator.language;
-      const dispose = mountVideoPrice(this, { client, t: createStrings(locale), choices });
+      const dispose = mountVideoPrice(this, { client, t: createStrings(locale), choices, kind, estimate });
       const removed = this.onRemoved;
       this.onRemoved = function (...values) {
         dispose();

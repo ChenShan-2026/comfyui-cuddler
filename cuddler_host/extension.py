@@ -22,7 +22,8 @@ class CuddlerExtension(ComfyExtension):
 
     async def get_node_list(self):
         from .video import CuddlerVideo
-        return [CuddlerVideo]
+        from .creative import CuddlerImage, CuddlerSpeech, CuddlerMusic
+        return [CuddlerVideo, CuddlerImage, CuddlerSpeech, CuddlerMusic]
 
 
 async def comfy_entrypoint():
