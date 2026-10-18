@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+import wave
 from unittest import mock
 
 from PIL import Image
@@ -122,13 +123,32 @@ class VideoNodeTest(unittest.IsolatedAsyncioTestCase):
             await self.execute()
         self.assertEqual(self.transport.requests, [])
 
-    def test_schema_advertises_only_the_two_implemented_modes_and_video_output(self):
+    def test_schema_advertises_all_modes_and_native_outputs(self):
         schema = self.video.CuddlerVideo.define_schema()
-        self.assertEqual(schema.outputs, ["VIDEO"])
+        self.assertEqual(schema.outputs, ["VIDEO", "IMAGE"])
         labels = [option.key for option in schema.inputs[0].options]
         self.assertTrue(labels)
-        self.assertTrue(all("/ Text to video /" in label or "/ First frame to video /" in label for label in labels))
+        self.assertTrue(any("/ Motion control /" in label for label in labels))
+        self.assertTrue(any("/ Extend video /" in label for label in labels))
         self.assertEqual([item.id for item in schema.inputs], ["model", "prompt", "max_usd", "seed"])
+
+    def test_audio_reference_encoding_is_bounded_and_metadata_free(self):
+        uploads = importlib.import_module(self.name + ".cuddler_host.uploads")
+        native = {"waveform": _HostImage(np.zeros((1, 2, 32000), dtype=np.float32)), "sample_rate": 16000,
+                  "workflow": "must not be uploaded"}
+        data = uploads.audio_wav(native)
+        self.assertNotIn(b"must not be uploaded", data)
+        with wave.open(io.BytesIO(data)) as audio:
+            self.assertEqual((audio.getnchannels(), audio.getnframes(), audio.getframerate()), (2, 32000, 16000))
+        for shape in ((1, 1, 100), (2, 1, 32000), (1, 3, 32000)):
+            with self.subTest(shape=shape), self.assertRaises(self.error):
+                uploads.audio_wav({"waveform": _HostImage(np.zeros(shape)), "sample_rate": 16000})
+        buffer = uploads.BoundedBuffer(4)
+        buffer.write(b"1234")
+        with self.assertRaises(self.error):
+            buffer.write(b"5")
+        with self.assertRaises(self.error):
+            uploads.ordered_slots({"video-1": "invalid"}, "video", 10)
 
 
 if __name__ == "__main__":

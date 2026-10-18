@@ -11,8 +11,21 @@ function node() {
 
 test("estimates contain only selected model and price parameters", () => {
   assert.deepEqual(estimateFor(node(), choices), { body: {
-    model: "seedance-2.5", mode: "text", variant: "default", duration: 4, resolution: "720p", aspect_ratio: "16:9",
+    model: "seedance-2.5", mode: "text", variant: "default", duration: 4, resolution: "720p", aspect_ratio: "16:9", reference_image_count: 0,
   }, cap: 2 });
+});
+
+test("video quotes count image links and label video-dependent prices as starting prices", () => {
+  const n = node();
+  n.inputs = [{ name: "model.reference_images.image0", link: 1 }, { name: "model.reference_images.image1", link: null },
+    { name: "model.reference_videos.video0", link: 2 }];
+  n.widgets.push({ name: "model.fps", value: 25 }, { name: "model.camera_fixed", value: true });
+  const quote = estimateFor(n, { selection: { model: "seedance-2.5", mode: "reference", variant: "default" } });
+  assert.equal(quote.body.reference_image_count, 1);
+  assert.equal(quote.body.fps, 25);
+  assert.equal(quote.startingPrice, true);
+  assert.equal(quote.body.camera_fixed, undefined);
+  assert.equal(quote.body.input_video_seconds, undefined);
 });
 
 test("silent model estimates override the API audio default without a toggle", () => {

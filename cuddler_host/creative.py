@@ -102,6 +102,10 @@ class CuddlerSpeech(io.ComfyNode):
                 inputs.extend([io.Boolean.Input("second_speaker", default=False),
                                io.Combo.Input("voice_id_2", options=voices),
                                io.String.Input("text_2", multiline=True, default="")])
+                inputs.append(io.String.Input("dialogue_script", multiline=True, default="",
+                    tooltip="Up to 50 turns, one per line: 1: Hello / 2: Hi. Use speaker numbers 1–10. "
+                            "Leave text empty and turn off second_speaker when using this script."))
+                inputs.extend(io.Combo.Input(f"voice_id_{i}", options=voices) for i in range(3, 11))
             options.append(io.DynamicCombo.Option(label, inputs))
         return io.Schema(node_id="CuddlerSpeech", display_name="Cuddler Speech", category="Cuddler",
             inputs=[io.DynamicCombo.Input("model", options=options, extra_dict={"cuddler_choices": {
@@ -117,14 +121,7 @@ class CuddlerSpeech(io.ComfyNode):
         runtime = None
         try:
             runtime = get_runtime()
-            if not isinstance(model, dict) or set(model) - {"model", "text", "voice_id", "second_speaker", "text_2", "voice_id_2"}:
-                raise CuddlerError("invalid_request")
-            lines = [{"voice_id": model.get("voice_id"), "text": model.get("text")}]
-            second = model.get("second_speaker", False)
-            if type(second) is not bool:
-                raise CuddlerError("invalid_request")
-            if second:
-                lines.append({"voice_id": model.get("voice_id_2"), "text": model.get("text_2")})
+            lines = audio.speech_lines(model)
             spec = audio.prepare_speech(runtime.catalog.current(), model.get("model"), lines, seed, max_usd)
             return await run(cls, runtime, spec)
         except CuddlerError as error:

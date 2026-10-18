@@ -7,7 +7,7 @@
   "nodeDefs": {
     "CuddlerVideo": {
       "display_name": "Cuddler Video",
-      "description": "Text or first-frame video. Connect VIDEO to Save Video. Other modes are still in development.",
+      "description": "Generate, edit or extend video with native references. Connect VIDEO to Save Video; enable return_last_frame for the optional IMAGE output.",
       "inputs": {
         "prompt": {
           "name": "Prompt"
@@ -34,7 +34,7 @@
     },
     "CuddlerSpeech": {
       "display_name": "Cuddler Speech",
-      "description": "Generate speech; dialogue models support a second speaker. Connect AUDIO to Save Audio.",
+      "description": "Generate speech or up to 50 dialogue turns with 10 voices. Connect AUDIO to Save Audio.",
       "inputs": {
         "max_usd": {
           "name": "Spending limit (USD)"

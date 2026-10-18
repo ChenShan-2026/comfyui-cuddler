@@ -14,7 +14,24 @@ export function imageEstimate(node, choices) {
 export function speechEstimate(node, choices) {
   const selected = choices[value(node, "model")];
   const text = value(node, "text"), voice_id = value(node, "voice_id");
-  if (!selected || !text?.trim() || !voice_id) return null;
+  if (!selected) return null;
+  const script = value(node, "dialogue_script");
+  if (typeof script === "string" && script.trim()) {
+    if (text?.trim() || value(node, "second_speaker") === true) return null;
+    const turns = script.split(/\r?\n/).filter(line => line.trim());
+    if (!turns.length || turns.length > 50) return null;
+    const lines = [];
+    for (const turn of turns) {
+      const match = /^\s*(10|[1-9])\s*:\s*(\S.*)$/.exec(turn);
+      if (!match) return null;
+      const voice = value(node, match[1] === "1" ? "voice_id" : `voice_id_${match[1]}`);
+      if (!voice) return null;
+      lines.push({ voice_id: voice, text: match[2].trim() });
+    }
+    const content = lines.length === 1 ? lines[0] : { dialogue: lines };
+    return { body: { model: selected.model, output_format: "mp3", ...content }, cap: value(node, "max_usd") };
+  }
+  if (!text?.trim() || !voice_id) return null;
   let content = { text, voice_id };
   if (value(node, "second_speaker") === true) {
     const second = { text: value(node, "text_2"), voice_id: value(node, "voice_id_2") };

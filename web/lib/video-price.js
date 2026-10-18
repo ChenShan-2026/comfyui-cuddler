@@ -9,12 +9,16 @@ export function estimateFor(node, choices) {
   const selected = choices[widget(node, "model")?.value];
   if (!selected) return null;
   const body = { ...selected };
-  for (const name of ["duration", "resolution", "aspect_ratio", "generate_audio"]) {
+  for (const name of ["duration", "resolution", "aspect_ratio", "generate_audio", "fps"]) {
     const value = widget(node, name)?.value;
     if (value !== undefined) body[name] = value;
   }
   if (typeof body.duration !== "number" || !body.resolution || !body.aspect_ratio) return null;
-  return { body, cap: widget(node, "max_usd")?.value };
+  body.reference_image_count = node.inputs?.filter(input =>
+    /^model\.(first_frame|last_frame|reference_images\.image\d+)$/.test(input.name) && input.link != null).length || 0;
+  const startingPrice = node.inputs?.some(input => /^model\.reference_videos\.video\d+$/.test(input.name) && input.link != null) ||
+    ["edit", "extend", "motion-control", "video-reference"].includes(body.mode);
+  return { body, cap: widget(node, "max_usd")?.value, ...(startingPrice ? { startingPrice: true } : {}) };
 }
 
 export function mountVideoPrice(node, { client, t, choices, repeat = setInterval, stop = clearInterval,
@@ -25,8 +29,10 @@ export function mountVideoPrice(node, { client, t, choices, repeat = setInterval
   let signature;
   let refreshed = 0;
   let disposed = false;
+  let startingPrice = false;
   const updater = updaterFactory({ client, t, onText(value) {
-    label.value = value.text;
+    label.value = startingPrice && !value.error ? t("priceStarting", { price: value.text }) : value.text;
+    label.color = value.over ? "#ef4444" : undefined;
     node.setDirtyCanvas?.(true, true);
   } });
   const refresh = () => {
@@ -39,6 +45,7 @@ export function mountVideoPrice(node, { client, t, choices, repeat = setInterval
     if (next !== signature || now() - refreshed >= 60_000) {
       signature = next;
       refreshed = now();
+      startingPrice = Boolean(request.startingPrice);
       updater.request(kind, request.body, request.cap);
     }
   };

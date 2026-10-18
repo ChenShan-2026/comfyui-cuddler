@@ -1,9 +1,9 @@
 # Cuddler for ComfyUI
 
 > **In development.** This plugin is not on the Comfy Registry yet. Version 1.0 adds the
-> Cuddler Video, Image, Speech and Music nodes. The current preview adds text and first-frame
-> video generation, plus image, speech and music nodes. Other video modes and paid release
-> acceptance are still in development. This preview is not a completed 1.0 release.
+> Cuddler Video, Image, Speech and Music nodes. The current preview implements the catalog's
+> nine video modes plus image, speech and music nodes. Paid release acceptance is still
+> pending. This preview is not a completed 1.0 release.
 
 [中文说明](README.zh-CN.md)
 
@@ -25,10 +25,18 @@ then restart ComfyUI. The plugin needs no extra Python packages.
 
 ## Video preview
 
-The development version provides **Cuddler Video**. Choose a model and either Text to video or
-First frame to video, write a prompt, and connect its VIDEO output to ComfyUI's **Save Video**.
-For a first frame, connect one IMAGE from **Load Image**. Batches are rejected. Only the two
-implemented modes are listed; reference-video, editing and other modes are not included yet.
+Choose a model and mode, write a prompt, and connect VIDEO to ComfyUI's **Save Video**.
+Depending on the model, modes include text, first frame, first/last frame, reference,
+image-reference, video-reference, edit, extend and motion control. Connect native IMAGE,
+VIDEO or AUDIO inputs to the reference slots; each connection exposes another slot up to
+the catalog limit. Image batches are rejected. Video inputs preserve the host's trim range;
+reference uploads omit workflow metadata. When enabled for a supported model,
+`return_last_frame` supplies the second IMAGE output; otherwise that output is empty.
+
+Video references have a 200 MiB limit (100 MiB for motion control); audio references are
+2–15 seconds and at most 50 MiB. Model-specific duration, dimensions and count limits still apply.
+For video-dependent pricing the label shows a starting price. Before creation, the plugin
+checks an exact estimate using the uploaded clips' actual durations against your spending limit.
 
 The selector and parameters come from the catalog. A model listed publicly may still be unavailable
 to your organization; the authenticated estimate and create request enforce access and spending limits.
@@ -39,7 +47,9 @@ Save the workflow with a fixed seed to recover the same operation after a restar
 - **Cuddler Image:** choose a catalog model, mode and variant. Reference/edit modes accept
   connected IMAGE inputs from Load Image, up to the selected model's limit. Connect IMAGE to Save Image.
 - **Cuddler Speech:** choose a model and voice, then enter the text. Dialogue models also offer
-  an optional second speaker. Connect AUDIO to Save Audio. The price estimate sends the entered
+  an optional second speaker, or a `dialogue_script` of up to 50 turns using voice selectors 1–10.
+  Write one turn per line, such as `1: Hello` and `2: Hi`; leave the main text empty and turn off
+  `second_speaker` when using the script. Connect AUDIO to Save Audio. The price estimate sends the entered
   text to Cuddler because speech is metered by text and voice.
 - **Cuddler Music:** choose a model and prompt, then connect AUDIO to Save Audio.
 

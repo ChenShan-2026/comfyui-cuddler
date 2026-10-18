@@ -70,10 +70,10 @@ def comfy_stubs(user_dir):
         Int=types.SimpleNamespace(Input=Input), Float=types.SimpleNamespace(Input=Input),
         String=types.SimpleNamespace(Input=Input), Combo=types.SimpleNamespace(Input=Input),
         Boolean=types.SimpleNamespace(Input=Input), Image=types.SimpleNamespace(Input=Input, Output=lambda: "IMAGE"),
-        Audio=types.SimpleNamespace(Output=lambda: "AUDIO"),
+        Audio=types.SimpleNamespace(Input=Input, Output=lambda: "AUDIO"),
         Autogrow=types.SimpleNamespace(Input=lambda id, template, **kw: Input(id, template=template, **kw),
             TemplatePrefix=lambda input, **kw: types.SimpleNamespace(input=input, **kw)),
-        Video=types.SimpleNamespace(Output=lambda: "VIDEO"),
+        Video=types.SimpleNamespace(Input=Input, Output=lambda: "VIDEO"),
         DynamicCombo=types.SimpleNamespace(Input=Input, Option=Option),
         ControlAfterGenerate=types.SimpleNamespace(fixed="fixed"),
         Hidden=types.SimpleNamespace(unique_id="UNIQUE_ID"))

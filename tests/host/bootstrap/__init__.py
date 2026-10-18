@@ -24,23 +24,49 @@ UPLOAD = "https://host-test.r2.cloudflarestorage.com/cuddler-media-private/input
 _fake = None
 
 
-def _video_bytes():
+def _video_bytes(*, size=16, seconds=1, rate=4, metadata=False):
     """A real tiny MP4, encoded only by the host CI's existing PyAV dependency."""
     import av
     import numpy as np
 
     target = io.BytesIO()
     with av.open(target, mode="w", format="mp4") as container:
-        stream = container.add_stream("mpeg4", rate=4)
-        stream.width = stream.height = 16
+        if metadata:
+            container.metadata["comment"] = "PRIVATE_WORKFLOW_MARKER"
+        stream = container.add_stream("mpeg4", rate=rate)
+        stream.width = stream.height = size
         stream.pix_fmt = "yuv420p"
-        for value in (32, 64, 96, 128):
-            frame = av.VideoFrame.from_ndarray(np.full((16, 16, 3), value, dtype=np.uint8), format="rgb24")
+        for index in range(seconds * rate):
+            frame = av.VideoFrame.from_ndarray(np.full((size, size, 3), 32 + index % 100, dtype=np.uint8), format="rgb24")
             for packet in stream.encode(frame):
                 container.mux(packet)
         for packet in stream.encode():
             container.mux(packet)
     return target.getvalue()
+
+
+class NativeMediaFixture:
+    """Real native inputs; only present in the host-test bootstrap, never the package."""
+    RETURN_TYPES = ("IMAGE", "IMAGE", "VIDEO", "AUDIO")
+    FUNCTION = "execute"
+    CATEGORY = "test"
+    _clip = None
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {}}
+
+    def execute(self):
+        import torch
+        from comfy_api.latest import InputImpl
+        if self._clip is None:
+            type(self)._clip = _video_bytes(size=720, seconds=6, rate=24, metadata=True)
+        return (torch.full((1, 720, 720, 3), 0.2), torch.full((1, 720, 720, 3), 0.6),
+                InputImpl.VideoFromFile(io.BytesIO(self._clip), start_time=1, duration=4),
+                {"waveform": torch.zeros(1, 1, 64000), "sample_rate": 16000})
+
+
+NODE_CLASS_MAPPINGS["CuddlerHostMediaFixture"] = NativeMediaFixture
 
 
 def _image_bytes():
@@ -81,6 +107,9 @@ class FakePlatform:
         self.create_requests = self.first_frame_creates = self.video_reads = 0
         self.upload_requests = self.upload_creates = self.upload_puts = 0
         self.upload_completes = self.upload_reads = 0
+        self.video_modes = set()
+        self.native_uploads = set()
+        self.long_dialogues = self.precise_video_quotes = self.last_frames = 0
 
     def _json(self, status, body):
         return self._response(status, {"content-type": "application/json"}, json.dumps(body).encode())
@@ -100,13 +129,31 @@ class FakePlatform:
             upload = self.uploads.get(upload_id)
             if not upload or not self._media_headers_safe(request) or len(request.body or b"") != upload["bytes"]:
                 return self._refuse()
-            from PIL import Image
             try:
-                with Image.open(io.BytesIO(request.body)) as image:
-                    image.load()
-                    if image.format != "PNG" or image.size != (16, 16) or image.info:
+                if b"PRIVATE_WORKFLOW_MARKER" in request.body:
+                    return self._refuse()
+                if upload["kind"] == "image":
+                    from PIL import Image
+                    with Image.open(io.BytesIO(request.body)) as image:
+                        image.load()
+                        if image.format != "PNG" or image.size not in {(16, 16), (720, 720)} or image.info:
+                            return self._refuse()
+                else:
+                    import av
+                    with av.open(io.BytesIO(request.body)) as container:
+                        if upload["kind"] == "video":
+                            stream = container.streams.video[0]
+                            duration = float(stream.duration * stream.time_base)
+                            if abs(duration - 4) > 0.05 or "comment" in container.metadata:
+                                return self._refuse()
+                        else:
+                            frame = next(container.decode(audio=0))
+                            if frame.sample_rate != 16000:
+                                return self._refuse()
+                if upload["kind"] not in {"image", "video", "audio"}:
                         return self._refuse()
-            except (OSError, ValueError):
+                self.native_uploads.add(upload["kind"])
+            except (OSError, ValueError, IndexError):
                 return self._refuse()
             self.upload_puts += 1
             self.uploaded.add(upload_id)
@@ -122,6 +169,12 @@ class FakePlatform:
             body = json.loads(request.body)
             if body.get("model") == "minimax-hailuo-2.3" and body.get("generate_audio", True):
                 return self._refuse()
+            if set(body) & {"prompt", "seed", "task_type", "return_last_frame", "camera_fixed", "reference_videos"}:
+                return self._refuse()
+            if "input_video_seconds" in body:
+                if abs(body["input_video_seconds"] - 4) > 0.05:
+                    return self._refuse()
+                self.precise_video_quotes += 1
             return self._json(200, ESTIMATE)
         for kind, endpoint, prefix in (("image", "images", "img"), ("speech", "speech", "aud"),
                                        ("music", "music", "mus")):
@@ -134,6 +187,8 @@ class FakePlatform:
                 if not key:
                     return self._refuse()
                 body = json.loads(request.body)
+                if kind == "speech" and len(body.get("dialogue", [])) == 50:
+                    self.long_dialogues += 1
                 for upload_id in body.get("reference_images", []):
                     if self.uploads.get(upload_id, {}).get("status") != "ready":
                         return self._refuse()
@@ -155,15 +210,15 @@ class FakePlatform:
                 return self._refuse()
             if key not in self.upload_keys:
                 body = json.loads(request.body)
-                if body.get("kind") != "image" or body.get("content_type") != "image/png":
+                if body.get("content_type") != {"image": "image/png", "video": "video/mp4", "audio": "audio/wav"}.get(body.get("kind")):
                     return self._refuse()
                 self.upload_creates += 1
                 upload_id = "upl_" + f"{self.upload_creates:020d}"
                 self.upload_keys[key] = upload_id
-                self.uploads[upload_id] = {"object": "upload", "id": upload_id, "kind": "image",
-                    "status": "pending", "content_type": "image/png", "bytes": body["bytes"],
+                self.uploads[upload_id] = {"object": "upload", "id": upload_id, "kind": body["kind"],
+                    "status": "pending", "content_type": body["content_type"], "bytes": body["bytes"],
                     "expires_at": "2099-01-01T00:00:00Z", "upload_url": UPLOAD + upload_id,
-                    "upload_headers": {"Content-Type": "image/png"}}
+                    "upload_headers": {"Content-Type": body["content_type"]}}
             return self._json(201, self.uploads[self.upload_keys[key]])
         if path.startswith("/uploads/"):
             upload_id = path.split("/")[2]
@@ -183,6 +238,12 @@ class FakePlatform:
             if not key:
                 return self._json(400, {"code": "invalid_request"})
             body = json.loads(request.body)
+            for name in ("first_frame", "last_frame", "reference_images", "reference_videos", "reference_audios"):
+                ids = body.get(name, [])
+                for upload_id in ([ids] if isinstance(ids, str) else ids):
+                    if self.uploads.get(upload_id, {}).get("status") != "ready":
+                        return self._refuse()
+            self.video_modes.add(body.get("mode"))
             if body.get("model") == "minimax-hailuo-2.3" and body.get("generate_audio", True):
                 return self._refuse()
             if body.get("mode") == "image":
@@ -195,7 +256,10 @@ class FakePlatform:
                 self.first_frame_creates += body.get("mode") == "image"
                 self.jobs[key] = {"object": "video", "id": "vid_" + f"{self.creates:020d}",
                     "model": body["model"], "status": "succeeded", "estimate": ESTIMATE,
-                    "output": {"url": OUTPUT, "retained_until": "2099-01-01T00:00:00Z"}, "error": None}
+                    "output": {"url": OUTPUT, "retained_until": "2099-01-01T00:00:00Z",
+                               "last_frame_url": OUTPUT + "/image" if body.get("return_last_frame") else None}, "error": None}
+                if body.get("return_last_frame"):
+                    self.last_frames += 1
             return self._json(200, self.jobs[key])
         if request.method == "GET" and path.startswith("/videos/"):
             job = next((job for job in self.jobs.values() if path == "/videos/" + job["id"]), None)
@@ -245,4 +309,7 @@ async def _stats(_request):
                               "upload_requests": _fake.upload_requests, "upload_creates": _fake.upload_creates,
                               "upload_puts": _fake.upload_puts, "upload_completes": _fake.upload_completes,
                               "upload_reads": _fake.upload_reads,
+                              "video_modes": sorted(_fake.video_modes), "native_uploads": sorted(_fake.native_uploads),
+                              "long_dialogues": _fake.long_dialogues, "precise_video_quotes": _fake.precise_video_quotes,
+                              "last_frames": _fake.last_frames,
                               "unexpected": _fake.unexpected})

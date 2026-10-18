@@ -1,4 +1,5 @@
 """Speech and music requests using the same durable runner as video and image."""
+import re
 from .errors import CuddlerError
 from .jobs import JobSpec
 from .money import cap_from_widget
@@ -12,6 +13,37 @@ def choices(catalog, kind):
 def _seed(seed):
     if type(seed) is not int or not 0 <= seed <= 2_147_483_647:
         raise CuddlerError("invalid_request")
+
+
+def speech_lines(values):
+    """A numbered dialogue script uses the ten visible voice selectors, never raw API JSON."""
+    allowed = {"model", "text", "voice_id", "second_speaker", "text_2", "dialogue_script"}
+    allowed.update(f"voice_id_{i}" for i in range(2, 11))
+    if not isinstance(values, dict) or values.keys() - allowed:
+        raise CuddlerError("invalid_request")
+    script = values.get("dialogue_script", "")
+    second = values.get("second_speaker", False)
+    if not isinstance(script, str) or type(second) is not bool:
+        raise CuddlerError("invalid_request")
+    if script.strip():
+        text = values.get("text", "")
+        if not isinstance(text, str) or text.strip() or second:
+            raise CuddlerError("invalid_request")
+        lines = []
+        for turn in script.splitlines():
+            if not turn.strip():
+                continue
+            match = re.fullmatch(r"\s*(10|[1-9])\s*:\s*(\S.*)", turn)
+            if not match or len(lines) >= 50:
+                raise CuddlerError("invalid_request")
+            speaker = int(match[1])
+            lines.append({"voice_id": values.get("voice_id" if speaker == 1 else f"voice_id_{speaker}"),
+                          "text": match[2].strip()})
+        return lines
+    lines = [{"voice_id": values.get("voice_id"), "text": values.get("text")}]
+    if second:
+        lines.append({"voice_id": values.get("voice_id_2"), "text": values.get("text_2")})
+    return lines
 
 
 def prepare_speech(catalog, selection, lines, seed, cap):

@@ -24,6 +24,7 @@ const STRINGS = {
     priceNeedsKey: "Add an API key to see the price",
     priceLabel: "Estimated price",
     price: "≈ {amount}",
+    priceStarting: "Starting price {price}; exact quote uses the uploaded clip",
     // {amount} is the most a run can be charged (hold_usd), not the estimate.
     overCap: "Up to {amount}, above the {cap} limit",
     priceError: "Price unavailable: {message}",
@@ -50,6 +51,7 @@ const STRINGS = {
     priceNeedsKey: "填写 API key 后显示价格",
     priceLabel: "预计价格",
     price: "约 {amount}",
+    priceStarting: "起步价 {price}；运行时按上传视频精确估价",
     overCap: "最多 {amount}，超过上限 {cap}",
     priceError: "暂时无法估价：{message}",
   },

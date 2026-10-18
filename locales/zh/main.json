@@ -7,7 +7,7 @@
   "nodeDefs": {
     "CuddlerVideo": {
       "display_name": "Cuddler 视频",
-      "description": "文生视频或首帧图生视频，将 VIDEO 输出接到 Save Video。其他用法仍在开发。",
+      "description": "使用原生参考素材生成、编辑或续写视频。VIDEO 接 Save Video；开启 return_last_frame 后可输出末帧 IMAGE。",
       "inputs": {
         "prompt": {
           "name": "提示词"
@@ -34,7 +34,7 @@
     },
     "CuddlerSpeech": {
       "display_name": "Cuddler 语音",
-      "description": "生成语音；对话模型支持第二位说话人。将 AUDIO 输出接到 Save Audio。",
+      "description": "生成语音，或输入最多 50 句、10 种声音的对话。AUDIO 接 Save Audio。",
       "inputs": {
         "max_usd": {
           "name": "花费上限（USD）"

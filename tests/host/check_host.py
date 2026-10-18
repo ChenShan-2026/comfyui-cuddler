@@ -65,6 +65,8 @@ def run_video(base, selection, *, audio=False, first_frame=None, seed=1729, para
     inputs.update(parameters or {})
     if audio:
         inputs["model.generate_audio"] = False
+    if "(seedance-2.5)" in selection:
+        inputs.update({"model.camera_fixed": False, "model.return_last_frame": False})
     workflow = {
         "1": {"class_type": "CuddlerVideo", "inputs": inputs},
         "2": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0], "filename_prefix": "cuddler-host-test/video",
@@ -119,6 +121,9 @@ def run_creative(base, node_id, *, reference=None):
                 inputs.update({"model.second_speaker": True,
                                "model.voice_id_2": values(required["voice_id_2"])[-1],
                                "model.text_2": "Hello again."})
+                inputs["model.dialogue_script"] = ""
+                for index in range(3, 11):
+                    inputs[f"model.voice_id_{index}"] = values(required[f"voice_id_{index}"])[0]
     image = node_id == "CuddlerImage"
     workflow = {
         "1": {"class_type": node_id, "inputs": inputs},
@@ -153,6 +158,61 @@ def decoded_video(base, saved):
     with av.open(io.BytesIO(media)) as container:
         frame = next(container.decode(video=0))
         return (frame.width, frame.height) == (16, 16)
+
+
+def dynamic_defaults(option):
+    result = {"model": option["key"]}
+    for name, spec in option["inputs"].get("required", {}).items():
+        kind, settings = spec[0], spec[1] if len(spec) > 1 else {}
+        options = kind if isinstance(kind, list) else settings.get("options", [])
+        if "default" in settings:
+            result["model." + name] = settings["default"]
+        elif options and kind != "AUTOGROW":
+            result["model." + name] = options[0]
+    return result
+
+
+def run_advanced_video(base, options, model_id, mode_label, *, last=False):
+    option = next(item for item in options if f"({model_id}) / {mode_label} /" in item["key"])
+    inputs = {**dynamic_defaults(option), "prompt": "Offline native media test", "max_usd": 2.0, "seed": 3101}
+    prefix = "model."
+    if mode_label in {"First frame to video", "First and last frame"}:
+        inputs[prefix + "first_frame"] = ["3", 0]
+        inputs[prefix + "last_frame"] = ["3", 1]
+    else:
+        if mode_label not in {"Extend video", "Video reference"}:
+            inputs[prefix + "reference_images.image0"] = ["3", 0]
+        if mode_label != "Image reference":
+            inputs[prefix + "reference_videos.video0"] = ["3", 2]
+        if mode_label == "Reference to video":
+            inputs[prefix + "reference_audios.audio0"] = ["3", 3]
+    if last:
+        inputs[prefix + "return_last_frame"] = True
+    workflow = {
+        "1": {"class_type": "CuddlerVideo", "inputs": inputs},
+        "2": {"class_type": "SaveImage" if last else "SaveVideo", "inputs":
+              {"images": ["1", 1], "filename_prefix": "cuddler-host-test/last-frame"} if last else
+              {"video": ["1", 0], "filename_prefix": "cuddler-host-test/advanced", "format": "auto", "codec": "auto"}},
+        "3": {"class_type": "CuddlerHostMediaFixture", "inputs": {}},
+    }
+    saved = run_workflow(base, workflow)["images"][0]
+    if not last:
+        return decoded_video(base, saved)
+    from PIL import Image
+    status, media = call(base, "GET", "/view?" + urllib.parse.urlencode(saved))
+    with Image.open(io.BytesIO(media)) as image:
+        return status == 200 and image.size == (16, 16)
+
+
+def run_long_dialogue(base):
+    info = json.loads(call(base, "GET", "/object_info/CuddlerSpeech")[1])["CuddlerSpeech"]
+    option = next(item for item in info["input"]["required"]["model"][1]["options"]
+                  if "dialogue_script" in item["inputs"].get("required", {}))
+    inputs = {**dynamic_defaults(option), "seed": 3301, "max_usd": 2.0,
+              "model.text": "", "model.second_speaker": False,
+              "model.dialogue_script": "\n".join(f"{i % 10 + 1}: Hello {i}." for i in range(50))}
+    run_workflow(base, {"1": {"class_type": "CuddlerSpeech", "inputs": inputs},
+        "2": {"class_type": "SaveAudio", "inputs": {"audio": ["1", 0], "filename_prefix": "cuddler-host-test/dialogue"}}})
 
 
 def main():
@@ -204,7 +264,7 @@ def main():
 
     status, body = call(base, "GET", "/object_info/CuddlerVideo")
     node = json.loads(body).get("CuddlerVideo", {}) if status == 200 else {}
-    check("CuddlerVideo is registered with a native VIDEO output", node.get("output") == ["VIDEO"], body)
+    check("CuddlerVideo is registered with native VIDEO and IMAGE outputs", node.get("output") == ["VIDEO", "IMAGE"], body)
     try:
         dynamic = node["input"]["required"]["model"][1]["options"]
         option = next(option for option in dynamic if
@@ -263,6 +323,25 @@ def main():
               reused["unexpected"] == 0, json.dumps(reused).encode())
     except Exception as error:
         check("the real first-frame VIDEO workflow completes", False, str(error).encode())
+
+    for model_id, mode in (("seedance-2.5", "Reference to video"), ("seedance-2.5", "Edit video"),
+            ("seedance-2.5", "Extend video"), ("kling-3.0", "Motion control"), ("kling-o1", "Image reference"),
+            ("kling-o1", "Video reference"), ("kling-o1", "First and last frame")):
+        try:
+            check("native inputs → " + mode + " → SaveVideo", run_advanced_video(base, dynamic, model_id, mode))
+        except Exception as error:
+            check(mode + " workflow completes", False, str(error).encode())
+    try:
+        check("requested last frame → native IMAGE → SaveImage",
+              run_advanced_video(base, dynamic, "seedance-2.5", "First frame to video", last=True))
+        run_long_dialogue(base)
+        stats = json.loads(call(base, "GET", "/cuddler-host-test/stats")[1])
+        check("50-turn dialogue survives native host input packing", stats["long_dialogues"] == 1)
+        check("image, trimmed video and audio uploads strip private metadata", stats["native_uploads"] == ["audio", "image", "video"])
+        check("video quotes use the encoded four-second clip", stats["precise_video_quotes"] >= 5)
+        check("all nine video modes reach the native host", len(stats["video_modes"]) == 9)
+    except Exception as error:
+        check("advanced media verification completes", False, str(error).encode())
 
     for node_id, native in (("CuddlerImage", "IMAGE"), ("CuddlerSpeech", "AUDIO"), ("CuddlerMusic", "AUDIO")):
         try:

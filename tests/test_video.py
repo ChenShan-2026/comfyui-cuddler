@@ -4,7 +4,7 @@ import unittest
 
 from cuddler_plugin.cuddler.catalog import parse
 from cuddler_plugin.cuddler.errors import CuddlerError
-from cuddler_plugin.cuddler.video import choices, defaults, prepare
+from cuddler_plugin.cuddler.video import VIDEO_MODES, VideoReference, choices, defaults, prepare
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,25 +21,33 @@ class VideoRequestTest(unittest.TestCase):
     def parameters(self, selection):
         return defaults(*self.choices[selection])
 
+    def media(self, mode):
+        clip = VideoReference(b"synthetic-video", 4, 720, 720, 24)
+        return ({"first_frame": b"first"} if mode == "image" else
+                {"first_frame": b"first", "last_frame": b"last"} if mode == "first-last-frame" else
+                {"reference_images": [b"reference"]} if mode in {"reference", "image-reference"} else
+                {"reference_images": [b"reference"], "reference_videos": [clip]} if mode == "motion-control" else
+                {"reference_videos": [clip]} if mode in {"video-reference", "edit", "extend"} else {})
+
     def test_each_advertised_model_mode_variant_has_valid_defaults(self):
         self.assertTrue(self.choices)
         modes = set()
         for selection, (model, mode, _) in self.choices.items():
             with self.subTest(selection=selection):
                 spec = prepare(self.catalog, selection, self.parameters(selection), "a synthetic scene", 12, 2,
-                               first_frame=b"synthetic-png" if mode == "image" else None)
+                               **self.media(mode))
                 self.assertEqual(spec.body["model"], model["id"])
                 self.assertEqual(spec.body["mode"], mode)
                 self.assertEqual(spec.cap_usd, "2.000000")
                 modes.add(mode)
-        self.assertEqual(modes, {"text", "image"})
+        self.assertEqual(modes, set(VIDEO_MODES))
 
     def test_estimates_exclude_prompt_seed_and_media(self):
         selection = self.selection("image")
         spec = prepare(self.catalog, selection, self.parameters(selection), "private prompt", 12, 2,
                        first_frame=b"synthetic-png")
         self.assertEqual(set(spec.estimate_body) - {"model", "mode", "variant", "duration", "resolution",
-                                                  "aspect_ratio", "generate_audio"}, set())
+                                                  "aspect_ratio", "generate_audio", "reference_image_count"}, set())
         self.assertNotIn("private prompt", json.dumps(spec.estimate_body))
         self.assertNotIn("first_frame", spec.body)
         self.assertEqual(spec.media[0].api_field, "first_frame")
@@ -92,6 +100,43 @@ class VideoRequestTest(unittest.TestCase):
             spec = prepare(self.catalog, selection, self.parameters(selection), "synthetic scene", 0, 2)
             self.assertIs(spec.body["generate_audio"], False)
             self.assertIs(spec.estimate_body["generate_audio"], False)
+
+    def test_edit_quote_uses_uploaded_duration_and_all_image_inputs(self):
+        selection = self.selection("edit")
+        clips = [VideoReference(b"one", 4.125, 720, 720, 24), VideoReference(b"two", 6.25, 720, 720, 24)]
+        spec = prepare(self.catalog, selection, self.parameters(selection), "edit", 1, 2,
+                       reference_videos=clips, reference_images=[b"image"])
+        self.assertEqual(spec.body["task_type"], "edit")
+        self.assertEqual(spec.estimate_body["duration"], 7)
+        self.assertEqual(spec.estimate_body["input_video_seconds"], 10.375)
+        self.assertEqual(spec.estimate_body["reference_image_count"], 1)
+        self.assertFalse(set(spec.estimate_body) & {"camera_fixed", "return_last_frame", "task_type", "prompt", "seed"})
+
+    def test_mode_and_reference_limits_fail_before_any_upload(self):
+        cases = [("text", "seedance-2.5", {"reference_images": [b"one"]}),
+                 ("image", "seedance-2.5", {"first_frame": b"one", "reference_images": [b"two"]}),
+                 ("first-last-frame", "kling-o1", {"first_frame": b"one"}),
+                 ("reference", "seedance-2.0", {"reference_audios": [b"audio"]}),
+                 ("reference", "seedance-2.5", {"reference_images": [b"same", b"same"]}),
+                 ("reference", "seedance-2.5", {"reference_images": [str(i).encode() for i in range(31)]}),
+                 ("edit", "seedance-2.5", {"reference_videos": [VideoReference(b"x", 3, 720, 720, 24)]}),
+                 ("motion-control", "kling-3.0", {"reference_videos": [VideoReference(b"x", 4, 720, 720, 24)]})]
+        for mode, model_id, media in cases:
+            selection = self.selection(mode, model_id)
+            with self.subTest(mode=mode, model=model_id), self.assertRaises(CuddlerError):
+                prepare(self.catalog, selection, self.parameters(selection), "synthetic", 1, 2, **media)
+
+    def test_legacy_fields_and_extra_controls_are_not_leaked_into_quotes(self):
+        selection = self.selection("image")
+        parameters = {**self.parameters(selection), "camera_fixed": True, "return_last_frame": True}
+        spec = prepare(self.catalog, selection, parameters, "synthetic", 12, 2, first_frame=b"first", last_frame=b"last")
+        self.assertTrue(spec.body["camera_fixed"])
+        self.assertTrue(spec.body["return_last_frame"])
+        self.assertEqual(spec.body["seed"], 12)
+        self.assertEqual(spec.estimate_body["reference_image_count"], 2)
+        for changes in ({"fps": 60}, {"camera_fixed": "false"}, {"character_orientation": "video"}):
+            with self.subTest(changes=changes), self.assertRaises(CuddlerError):
+                prepare(self.catalog, selection, parameters | changes, "synthetic", 1, 2, first_frame=b"first")
 
 
 if __name__ == "__main__":

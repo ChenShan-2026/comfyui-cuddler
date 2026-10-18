@@ -72,6 +72,19 @@ class CreativeRequestsTest(unittest.TestCase):
             with self.assertRaises(CuddlerError):
                 audio.prepare_music(self.catalog, label, "x" * 2001, 1, 2)
 
+    def test_numbered_script_preserves_fifty_turns_and_ten_speakers(self):
+        values = {"voice_id": "speaker-1", **{f"voice_id_{i}": f"speaker-{i}" for i in range(2, 11)},
+                  "text": "", "dialogue_script": "\n".join(f"{i % 10 + 1}: 你好 {i}🙂" for i in range(50))}
+        lines = audio.speech_lines(values)
+        self.assertEqual(len(lines), 50)
+        self.assertEqual(len({line["voice_id"] for line in lines}), 10)
+        self.assertEqual(lines[-1], {"voice_id": "speaker-10", "text": "你好 49🙂"})
+        for changes in ({"text": "conflicting text"}, {"second_speaker": True},
+                        {"dialogue_script": "11: invalid"}, {"dialogue_script": "no speaker: hello"},
+                        {"dialogue_script": values["dialogue_script"] + "\n1: too many"}):
+            with self.subTest(changes=list(changes)), self.assertRaises(CuddlerError):
+                audio.speech_lines(values | changes)
+
 
 class CreativeNodesTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

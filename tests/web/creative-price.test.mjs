@@ -24,3 +24,16 @@ test("fixed-price music estimate never sends the user's prompt", () => {
   const n = node({ model: "music", prompt: "private", max_usd: 2 });
   assert.equal(musicEstimate(n, { music: { model: "lyria-3" } }).body.prompt, "Instrumental music.");
 });
+
+test("numbered dialogue quotes exactly fifty turns and ten voice selections", () => {
+  const controls = { model: "speech", "model.text": "", "model.voice_id": "voice_1", max_usd: 2,
+    "model.dialogue_script": Array.from({ length: 50 }, (_, i) => `${i % 10 + 1}: 你好 ${i}🙂`).join("\n") };
+  for (let i = 2; i <= 10; i++) controls[`model.voice_id_${i}`] = `voice_${i}`;
+  const n = node(controls), choices = { speech: { model: "elevenlabs-v4" } };
+  const lines = speechEstimate(n, choices).body.dialogue;
+  assert.equal(lines.length, 50);
+  assert.equal(new Set(lines.map(line => line.voice_id)).size, 10);
+  assert.deepEqual(lines.at(-1), { voice_id: "voice_10", text: "你好 49🙂" });
+  n.widgets.find(w => w.name === "model.dialogue_script").value += "\n1: Too many";
+  assert.equal(speechEstimate(n, choices), null);
+});
