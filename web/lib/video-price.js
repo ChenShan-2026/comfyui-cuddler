@@ -26,12 +26,16 @@ export function mountVideoPrice(node, { client, t, choices, repeat = setInterval
   kind = "video", estimate = estimateFor }) {
   const label = node.addWidget("text", t("priceLabel"), t("priceNeedsKey"), () => {}, { serialize: false });
   label.disabled = true;
+  // Recent ComfyUI frontends hide disabled widget values, but still draw the label.
+  // Keep the quote read-only and visible without changing the stable widget name.
+  label.label = `${t("priceLabel")}: ${label.value}`;
   let signature;
   let refreshed = 0;
   let disposed = false;
   let startingPrice = false;
   const updater = updaterFactory({ client, t, onText(value) {
     label.value = startingPrice && !value.error ? t("priceStarting", { price: value.text }) : value.text;
+    label.label = `${t("priceLabel")}: ${label.value}`;
     label.color = value.over ? "#ef4444" : undefined;
     node.setDirtyCanvas?.(true, true);
   } });

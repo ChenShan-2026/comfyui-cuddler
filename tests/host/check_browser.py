@@ -67,6 +67,9 @@ def main():
             page.wait_for_function("() => window.__cuddlerCheckNode.widgets.some((widget) => "
                                    "typeof widget.value === 'string' && widget.value.includes('$0.66'))",
                                    timeout=30_000)
+            page.wait_for_function("() => window.__cuddlerCheckNode.widgets.some((widget) => "
+                                   "widget.disabled === true && typeof widget.label === 'string' && "
+                                   "widget.label.includes('$0.66'))", timeout=30_000)
             workflow = page.evaluate("() => window.__cuddlerCheckNode.serialize()")
             if KEY in json.dumps(workflow):
                 raise AssertionError("the API key reached a workflow")

@@ -43,6 +43,9 @@ test("dynamic controls, periodic refresh and removal use one disposable updater"
       dispose() { disposed++; } }; } });
   assert.equal(requests.length, 1);
   assert.equal(n.widgets.at(-1).value, "$0.66");
+  assert.equal(n.widgets.at(-1).disabled, true);
+  assert.equal(n.widgets.at(-1).label, "priceLabel: $0.66");
+  assert.equal(n.widgets.at(-1).name, "priceLabel");
   tick();
   assert.equal(requests.length, 1);
   n.widgets = n.widgets.map((widget) => widget.name === "model.duration" ? { ...widget, value: 5 } : widget);
