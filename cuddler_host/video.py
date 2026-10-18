@@ -81,7 +81,8 @@ class CuddlerVideo(io.ComfyNode):
             description="Text or first-frame video. Same inputs and seed recover the original job. "
                         "Connect VIDEO to Save Video. Other video modes are still in development.",
             inputs=[io.DynamicCombo.Input("model", options=options, extra_dict={"cuddler_choices": {
-                        label: {"model": model["id"], "mode": mode, "variant": variant}
+                        label: {"model": model["id"], "mode": mode, "variant": variant,
+                                "generate_audio": model.get("native_audio", True)}
                         for label, (model, mode, variant) in selections.items()}}),
                     io.String.Input("prompt", multiline=True, default=""),
                     io.Float.Input("max_usd", display_name="Spending limit (USD)", default=2.0,

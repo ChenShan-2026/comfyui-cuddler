@@ -15,6 +15,12 @@ test("estimates contain only selected model and price parameters", () => {
   }, cap: 2 });
 });
 
+test("silent model estimates override the API audio default without a toggle", () => {
+  const silent = { selection: { model: "minimax-hailuo-2.3", mode: "text", variant: "standard",
+    generate_audio: false } };
+  assert.equal(estimateFor(node(), silent).body.generate_audio, false);
+});
+
 test("dynamic controls, periodic refresh and removal use one disposable updater", () => {
   const n = node(), requests = [];
   let tick, disposed = 0, stopped, time = 0;

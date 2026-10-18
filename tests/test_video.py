@@ -83,6 +83,16 @@ class VideoRequestTest(unittest.TestCase):
         with self.assertRaises(CuddlerError):
             prepare(self.catalog, selection, {**parameters, "duration": 5}, "synthetic scene", 0, 2)
 
+    def test_silent_models_send_false_to_override_the_api_default(self):
+        for model_id in ("minimax-hailuo-2.3", "kling-2.5-turbo"):
+            selection = self.selection(model_id=model_id)
+            model, _, _ = self.choices[selection]
+            self.assertFalse(model["native_audio"])
+            self.assertNotIn("generate_audio", model["request_fields"])
+            spec = prepare(self.catalog, selection, self.parameters(selection), "synthetic scene", 0, 2)
+            self.assertIs(spec.body["generate_audio"], False)
+            self.assertIs(spec.estimate_body["generate_audio"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

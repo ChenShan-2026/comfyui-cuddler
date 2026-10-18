@@ -66,8 +66,10 @@ def prepare(catalog, selection, parameters, prompt, seed, cap, *, first_frame=No
     if prices and not any(all(name not in row or row[name] == value for name, value in dimensions.items())
                           for row in prices):
         raise CuddlerError("invalid_request")
+    # The API defaults generate_audio to true. Silent models do not advertise an audio
+    # toggle, but still require an explicit false; omitting it would reject every run.
     body = {"model": model["id"], "mode": mode, "variant": variant,
-            "prompt": prompt.strip(), **parameters}
+            "prompt": prompt.strip(), "generate_audio": model.get("native_audio", True), **parameters}
     if "seed" in fields:
         body["seed"] = seed
     media = []

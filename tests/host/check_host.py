@@ -57,11 +57,12 @@ def upload_first_frame(base):
     return "/".join(part for part in (image.get("subfolder"), image["name"]) if part)
 
 
-def run_video(base, selection, *, audio=False, first_frame=None, seed=1729):
+def run_video(base, selection, *, audio=False, first_frame=None, seed=1729, parameters=None):
     """Submit the real host's flat DynamicCombo API inputs, then wait for SaveVideo."""
     inputs = {"model": selection, "model.duration": 4, "model.resolution": "720p",
               "model.aspect_ratio": "adaptive" if first_frame else "16:9",
               "prompt": "offline host integration", "seed": seed, "max_usd": 2.0}
+    inputs.update(parameters or {})
     if audio:
         inputs["model.generate_audio"] = False
     workflow = {
@@ -223,6 +224,16 @@ def main():
               json.dumps(after).encode())
     except Exception as error:
         check("the real VIDEO workflow completes", False, str(error).encode())
+
+    try:
+        silent = next(option for option in dynamic if
+                      "(minimax-hailuo-2.3) / Text to video / standard" in option["key"])
+        metadata = node["input"]["required"]["model"][1]["cuddler_choices"][silent["key"]]
+        check("silent-model price metadata explicitly disables audio", metadata.get("generate_audio") is False)
+        saved = run_video(base, silent["key"], parameters={"model.duration": 6, "model.resolution": "768p"})
+        check("a silent model runs without an audio toggle", decoded_video(base, saved))
+    except Exception as error:
+        check("the silent VIDEO workflow completes", False, str(error).encode())
 
     try:
         option = next(option for option in dynamic if

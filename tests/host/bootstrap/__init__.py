@@ -119,6 +119,9 @@ class FakePlatform:
         if (request.method, path) == ("GET", "/balance"):
             return self._json(200, BALANCE)
         if (request.method, path) == ("POST", "/videos/estimate"):
+            body = json.loads(request.body)
+            if body.get("model") == "minimax-hailuo-2.3" and body.get("generate_audio", True):
+                return self._refuse()
             return self._json(200, ESTIMATE)
         for kind, endpoint, prefix in (("image", "images", "img"), ("speech", "speech", "aud"),
                                        ("music", "music", "mus")):
@@ -180,6 +183,8 @@ class FakePlatform:
             if not key:
                 return self._json(400, {"code": "invalid_request"})
             body = json.loads(request.body)
+            if body.get("model") == "minimax-hailuo-2.3" and body.get("generate_audio", True):
+                return self._refuse()
             if body.get("mode") == "image":
                 upload_id = body.get("first_frame")
                 upload = self.uploads.get(upload_id)
