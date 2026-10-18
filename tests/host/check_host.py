@@ -93,11 +93,15 @@ def run_workflow(base, workflow):
 
 
 def run_creative(base, node_id, *, reference=None):
+    def values(schema):
+        # V3 COMBO serializes its choices in options; V1 uses the type slot.
+        return schema[0] if isinstance(schema[0], list) else schema[1]["options"]
+
     node = json.loads(call(base, "GET", "/object_info/" + node_id)[1])[node_id]
     inputs = {"seed": 2201, "max_usd": 2.0}
     model = node["input"]["required"]["model"]
     if node_id == "CuddlerMusic":
-        inputs.update(model=model[0][0], prompt="Original instrumental")
+        inputs.update(model=values(model)[0], prompt="Original instrumental")
     else:
         options = model[1]["options"]
         option = (next(item for item in options if (" / reference / " if reference else " / text / ") in item["key"])
@@ -106,13 +110,13 @@ def run_creative(base, node_id, *, reference=None):
         required = option["inputs"]["required"]
         if node_id == "CuddlerImage":
             inputs.update(prompt="An orange ball", **{
-                "model.resolution": required["resolution"][0][0],
-                "model.aspect_ratio": required["aspect_ratio"][0][0]})
+                "model.resolution": values(required["resolution"])[0],
+                "model.aspect_ratio": values(required["aspect_ratio"])[0]})
         else:
-            inputs.update({"model.voice_id": required["voice_id"][0][0], "model.text": "Hello world."})
+            inputs.update({"model.voice_id": values(required["voice_id"])[0], "model.text": "Hello world."})
             if "second_speaker" in required:
                 inputs.update({"model.second_speaker": True,
-                               "model.voice_id_2": required["voice_id_2"][0][-1],
+                               "model.voice_id_2": values(required["voice_id_2"])[-1],
                                "model.text_2": "Hello again."})
     image = node_id == "CuddlerImage"
     workflow = {
