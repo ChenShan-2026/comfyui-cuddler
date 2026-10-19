@@ -57,7 +57,7 @@ def discrete_durations(model, mode):
     # /v1/models has model-wide bounds; Kling's quote contract narrows these modes.
     # Keep aligned with the API's shared platformKlingDurations capability rules.
     if mode not in {"edit", "motion-control"} and (model["id"] in {"kling-2.5-turbo", "kling-2.6"}
-            or model["id"] == "kling-o1" and mode == "first-last-frame"):
+            or model["id"] == "kling-o1" and mode in {"text", "first-last-frame"}):
         return (5, 10)
     return ()
 

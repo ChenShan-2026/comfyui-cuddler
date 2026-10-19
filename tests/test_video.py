@@ -114,7 +114,8 @@ class VideoRequestTest(unittest.TestCase):
 
     def test_kling_discrete_durations_reject_invalid_run_before_upload(self):
         for model_id, mode in (("kling-2.6", "text"), ("kling-2.6", "image"),
-                               ("kling-2.5-turbo", "text"), ("kling-o1", "first-last-frame")):
+                               ("kling-2.5-turbo", "text"), ("kling-o1", "text"),
+                               ("kling-o1", "first-last-frame")):
             selection = self.selection(mode, model_id)
             parameters = self.parameters(selection)
             self.assertEqual(parameters["duration"], 5)
