@@ -34,9 +34,26 @@ class StateTest(unittest.TestCase):
     def test_begin_job_replaces_an_old_attempt(self):
         self.db.begin_job("fp", "video", "job-key-1")
         self.db.update_job("fp", status="failed", job_id="vid_x")
-        self.db.begin_job("fp", "video", "job-key-2")
+        self.db.begin_job("fp", "video", "job-key-2", previous_key="job-key-1")
         row = self.db.job("fp")
         self.assertEqual((row["idempotency_key"], row["job_id"], row["status"]), ("job-key-2", None, "submitting"))
+
+    def test_stale_reservation_cannot_replace_a_newer_attempt(self):
+        self.db.begin_job("fp", "video", "old")
+        self.db.update_job("fp", status="failed")
+        self.db.begin_job("fp", "video", "new", previous_key="old")
+        self.db.update_job("fp", status="failed")
+        with self.assertRaises(CuddlerError) as caught:
+            self.db.begin_job("fp", "video", "stale", previous_key="old")
+        self.assertEqual(caught.exception.code, "recovery_required")
+        self.assertEqual(self.db.job("fp")["idempotency_key"], "new")
+
+    def test_terminal_reservation_does_not_authorize_credential_change(self):
+        self.db.begin_job("fp", "video", "old", credential_identity="first")
+        self.db.update_job("fp", status="failed")
+        with self.assertRaises(CuddlerError):
+            self.db.begin_job("fp", "video", "new", previous_key="old", credential_identity="second")
+        self.assertEqual(self.db.job("fp")["credential_identity"], "first")
 
     def test_upload_lifecycle(self):
         self.db.begin_upload("d:image", "upl-key")
@@ -169,7 +186,11 @@ class StateFailureTest(unittest.TestCase):
             try:
                 for turn in range(25):
                     fingerprint = f"fp-{number}-{turn % 3}"
-                    db.begin_job(fingerprint, "video", f"k-{number}-{turn}")
+                    previous = db.job(fingerprint)
+                    if previous:
+                        db.update_job(fingerprint, status="failed")
+                    db.begin_job(fingerprint, "video", f"k-{number}-{turn}",
+                                 previous_key=previous["idempotency_key"] if previous else None)
                     db.update_job(fingerprint, status="queued", job_id=f"vid_{number}")
                     self.assertEqual(db.job(fingerprint)["job_id"], f"vid_{number}")
                     db.cleanup()

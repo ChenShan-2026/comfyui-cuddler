@@ -151,13 +151,29 @@ class StateDB:
     def job(self, fingerprint):
         return self._one("SELECT * FROM jobs WHERE fingerprint = ?", (fingerprint,))
 
-    def begin_job(self, fingerprint, kind, idempotency_key, request=None, *, credential_identity=None):
+    def begin_job(self, fingerprint, kind, idempotency_key, request=None, *, credential_identity=None,
+                  previous_key=None):
         """Record the key a create request is about to carry, and (`request`, JSON text) what that request adds to
-        the run's inputs. Replaces whatever the run had: the caller has checked it is dead or absent."""
+        the run's inputs. Atomically require the absent/terminal attempt the caller actually observed.
+
+        Separate ComfyUI processes can share a user directory. Their in-memory locks cannot prevent
+        both from estimating before either reserves: never overwrite another process's new key.
+        """
         now = self._clock()
-        self._write("INSERT OR REPLACE INTO jobs (fingerprint, kind, idempotency_key, job_id, status, created_at, "
-                    "updated_at, request, credential_identity) VALUES (?, ?, ?, NULL, 'submitting', ?, ?, ?, ?)",
-                    (fingerprint, kind, idempotency_key, now, now, request, credential_identity))
+        with _coded_failures(), closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT kind, idempotency_key, status, credential_identity FROM jobs "
+                                  "WHERE fingerprint = ?", (fingerprint,)).fetchone()
+            if existing is not None:
+                if (previous_key is None or existing["idempotency_key"] != previous_key
+                        or existing["kind"] != kind or existing["status"] not in {"failed", "canceled"}
+                        or existing["credential_identity"] != credential_identity):
+                    raise CuddlerError("recovery_required", status=500)
+            elif previous_key is not None:
+                raise CuddlerError("recovery_required", status=500)
+            db.execute("INSERT OR REPLACE INTO jobs (fingerprint, kind, idempotency_key, job_id, status, created_at, "
+                       "updated_at, request, credential_identity) VALUES (?, ?, ?, NULL, 'submitting', ?, ?, ?, ?)",
+                       (fingerprint, kind, idempotency_key, now, now, request, credential_identity))
 
     def update_job(self, fingerprint, *, status, job_id=None, credential_identity=None):
         self._write("UPDATE jobs SET status = ?, job_id = COALESCE(?, job_id), updated_at = ?, "

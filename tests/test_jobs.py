@@ -348,6 +348,35 @@ class JobRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
         self.assertEqual(self.runner._locks, {})  # a finished fingerprint keeps no lock
 
+    async def test_independent_runtimes_cannot_replace_each_others_paid_reservation(self):
+        other, _ = make_runner(self.tmp.name, self.transport, self.clock)
+        for _ in range(2):
+            self.script_estimate()
+            self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        ready, arrived = asyncio.Event(), 0
+
+        def synchronize(runner):
+            prepare = runner._prepare
+
+            async def together(spec, progress):
+                nonlocal arrived
+                result = await prepare(spec, progress)
+                arrived += 1
+                if arrived == 2:
+                    ready.set()
+                await asyncio.wait_for(ready.wait(), 2)
+                return result
+
+            runner._prepare = together
+
+        for runner in (self.runner, other):
+            synchronize(runner)
+        results = await asyncio.gather(self.run_job(), other.run(self.spec()), return_exceptions=True)
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+        self.assertEqual(sum(isinstance(r, dict) for r in results), 1)
+        refused = next(r for r in results if isinstance(r, CuddlerError))
+        self.assertEqual(refused.code, "recovery_required")
+
     def runner_with_key(self, key, *, operation_locks=None):
         client = PlatformClient(self.transport, key)
         return JobRunner(client, self.state, Uploader(client, self.state, sleep=lambda s: None),

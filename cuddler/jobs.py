@@ -187,7 +187,8 @@ class JobRunner:
         if key is None:
             key = "job-" + uuid.uuid4().hex
             await self._state_call(self._state.begin_job, fingerprint, spec.kind, key, json.dumps(added),
-                                   credential_identity=identity)
+                                   credential_identity=identity,
+                                   previous_key=row["idempotency_key"] if row else None)
         try:
             job = await self._create(spec.kind, _request_body(spec.body, added), key)
         except CuddlerError as error:
