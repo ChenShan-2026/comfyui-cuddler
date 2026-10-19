@@ -10,7 +10,7 @@ from server import PromptServer
 from ..cuddler.errors import CuddlerError
 from ..cuddler.i18n import describe
 from ..cuddler.catalog import parse
-from ..cuddler.video import aspect_ratios, choices, defaults, prepare, request_fields
+from ..cuddler.video import aspect_ratios, choices, defaults, discrete_durations, prepare, request_fields
 from .media import image_tensor
 from .runtime import SNAPSHOT, get_runtime
 from .uploads import audio_wav, ordered_slots, video_mp4
@@ -115,9 +115,12 @@ class CuddlerVideo(io.ComfyNode):
         for label, (model, mode, variant) in selections.items():
             initial = defaults(model, mode, variant)
             fields = request_fields(model)
+            durations = discrete_durations(model, mode)
             inputs = [
                 io.Int.Input("duration", default=initial["duration"],
-                             min=max(1, model["min_duration"]), max=min(30, model["max_duration"])),
+                             min=durations[0] if durations else max(1, model["min_duration"]),
+                             max=durations[-1] if durations else min(30, model["max_duration"]),
+                             step=5 if durations else 1),
                 io.Combo.Input("resolution", options=model["resolutions"], default=initial["resolution"]),
                 io.Combo.Input("aspect_ratio", options=aspect_ratios(model, mode), default=initial["aspect_ratio"]),
             ]

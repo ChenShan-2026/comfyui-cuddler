@@ -53,6 +53,15 @@ def aspect_ratios(model, mode):
     return [ratio for ratio in ratios if ratio != "adaptive"]
 
 
+def discrete_durations(model, mode):
+    # /v1/models has model-wide bounds; Kling's quote contract narrows these modes.
+    # Keep aligned with the API's shared platformKlingDurations capability rules.
+    if mode not in {"edit", "motion-control"} and (model["id"] in {"kling-2.5-turbo", "kling-2.6"}
+            or model["id"] == "kling-o1" and mode == "first-last-frame"):
+        return (5, 10)
+    return ()
+
+
 def defaults(model, mode, variant):
     rows = [row for row in model.get("pricing", [])
             if row.get("mode", mode) == mode and row.get("variant", variant) == variant]
@@ -60,6 +69,9 @@ def defaults(model, mode, variant):
     value = {"duration": row.get("duration", max(1, model["min_duration"])),
              "resolution": row.get("resolution", model["resolutions"][0]),
              "aspect_ratio": aspect_ratios(model, mode)[0]}
+    durations = discrete_durations(model, mode)
+    if durations and value["duration"] not in durations:
+        value["duration"] = durations[0]
     fields = request_fields(model)
     if "generate_audio" in fields:
         value["generate_audio"] = row.get("generate_audio", model.get("native_audio", False))
@@ -157,6 +169,7 @@ def prepare(catalog, selection, parameters, prompt, seed, cap, *, first_frame=No
         raise CuddlerError("invalid_request")
     duration = parameters.get("duration")
     if (type(duration) is not int or not max(1, model["min_duration"]) <= duration <= min(30, model["max_duration"])
+            or discrete_durations(model, mode) and duration not in discrete_durations(model, mode)
             or parameters.get("resolution") not in model["resolutions"]
             or parameters.get("aspect_ratio") not in aspect_ratios(model, mode)
             or not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= (2500 if model["id"].startswith("kling-") else 4000)
@@ -187,6 +200,9 @@ def prepare(catalog, selection, parameters, prompt, seed, cap, *, first_frame=No
     estimate["reference_image_count"] = len(reference_images) + (first_frame is not None) + (last_frame is not None)
     if reference_videos:
         estimate["input_video_seconds"] = sum(item.seconds for item in reference_videos)
+        if model["id"].startswith("kling-") and mode in {"edit", "motion-control"}:
+            # These modes render the source clip's duration, irrespective of the widget.
+            body["duration"] = estimate["duration"] = math.ceil(reference_videos[0].seconds)
         if model["id"] == "seedance-2.5" and mode == "edit":
             estimate["duration"] = math.ceil(max(item.seconds for item in reference_videos))
     return JobSpec("video", body, estimate, cap_from_widget(cap), seed=seed, media=media)

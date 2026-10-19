@@ -112,6 +112,31 @@ class VideoRequestTest(unittest.TestCase):
         self.assertEqual(spec.estimate_body["reference_image_count"], 1)
         self.assertFalse(set(spec.estimate_body) & {"camera_fixed", "return_last_frame", "task_type", "prompt", "seed"})
 
+    def test_kling_discrete_durations_reject_invalid_run_before_upload(self):
+        for model_id, mode in (("kling-2.6", "text"), ("kling-2.6", "image"),
+                               ("kling-2.5-turbo", "text"), ("kling-o1", "first-last-frame")):
+            selection = self.selection(mode, model_id)
+            parameters = self.parameters(selection)
+            self.assertEqual(parameters["duration"], 5)
+            for duration in (3, 6, 9):
+                with self.subTest(model=model_id, duration=duration), self.assertRaises(CuddlerError):
+                    prepare(self.catalog, selection, parameters | {"duration": duration}, "synthetic", 1, 2,
+                            **self.media(mode))
+            for duration in (5, 10):
+                spec = prepare(self.catalog, selection, parameters | {"duration": duration}, "synthetic", 1, 2,
+                               **self.media(mode))
+                self.assertEqual(spec.body["duration"], duration)
+
+    def test_kling_source_length_controls_both_quote_and_creation(self):
+        for model_id, mode in (("kling-3.0", "motion-control"), ("kling-2.6", "motion-control"),
+                               ("kling-o1", "edit"), ("kling-o3", "edit")):
+            selection = self.selection(mode, model_id)
+            media = self.media(mode) | {"reference_videos": [VideoReference(b"clip", 4.0417, 720, 720, 24)]}
+            spec = prepare(self.catalog, selection, self.parameters(selection), "synthetic", 1, 2, **media)
+            self.assertEqual(spec.body["duration"], 5)
+            self.assertEqual(spec.estimate_body["duration"], 5)
+            self.assertEqual(spec.estimate_body["input_video_seconds"], 4.0417)
+
     def test_mode_and_reference_limits_fail_before_any_upload(self):
         cases = [("text", "seedance-2.5", {"reference_images": [b"one"]}),
                  ("image", "seedance-2.5", {"first_frame": b"one", "reference_images": [b"two"]}),
