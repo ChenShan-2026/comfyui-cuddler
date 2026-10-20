@@ -175,10 +175,20 @@ class StateDB:
                        "updated_at, request, credential_identity) VALUES (?, ?, ?, NULL, 'submitting', ?, ?, ?, ?)",
                        (fingerprint, kind, idempotency_key, now, now, request, credential_identity))
 
-    def update_job(self, fingerprint, *, status, job_id=None, credential_identity=None):
-        self._write("UPDATE jobs SET status = ?, job_id = COALESCE(?, job_id), updated_at = ?, "
-                    "credential_identity = COALESCE(?, credential_identity) WHERE fingerprint = ?",
-                    (status, job_id, self._clock(), credential_identity, fingerprint))
+    def update_job(self, fingerprint, *, expected_key, status, job_id=None, credential_identity=None):
+        """Only the attempt that issued a request may record its response.
+
+        A terminal reply can arrive after another process has reserved a new
+        attempt. Failing closed keeps that old reply from unlocking a third job.
+        """
+        with _coded_failures(), closing(self._connect()) as db, db:
+            updated = db.execute(
+                "UPDATE jobs SET status = ?, job_id = COALESCE(?, job_id), updated_at = ?, "
+                "credential_identity = COALESCE(?, credential_identity) "
+                "WHERE fingerprint = ? AND idempotency_key = ?",
+                (status, job_id, self._clock(), credential_identity, fingerprint, expected_key))
+            if updated.rowcount != 1:
+                raise CuddlerError("recovery_required", status=500)
 
     # Uploads.
     def upload(self, digest):

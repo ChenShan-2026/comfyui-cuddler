@@ -26,23 +26,23 @@ class StateTest(unittest.TestCase):
         self.assertIsNone(self.db.job("fp"))
         self.db.begin_job("fp", "video", "job-key-1")
         self.assertEqual(self.db.job("fp")["status"], "submitting")
-        self.db.update_job("fp", status="queued", job_id="vid_x")
-        self.db.update_job("fp", status="succeeded")
+        self.db.update_job("fp", expected_key="job-key-1", status="queued", job_id="vid_x")
+        self.db.update_job("fp", expected_key="job-key-1", status="succeeded")
         row = self.db.job("fp")
         self.assertEqual((row["status"], row["job_id"], row["idempotency_key"]), ("succeeded", "vid_x", "job-key-1"))
 
     def test_begin_job_replaces_an_old_attempt(self):
         self.db.begin_job("fp", "video", "job-key-1")
-        self.db.update_job("fp", status="failed", job_id="vid_x")
+        self.db.update_job("fp", expected_key="job-key-1", status="failed", job_id="vid_x")
         self.db.begin_job("fp", "video", "job-key-2", previous_key="job-key-1")
         row = self.db.job("fp")
         self.assertEqual((row["idempotency_key"], row["job_id"], row["status"]), ("job-key-2", None, "submitting"))
 
     def test_stale_reservation_cannot_replace_a_newer_attempt(self):
         self.db.begin_job("fp", "video", "old")
-        self.db.update_job("fp", status="failed")
+        self.db.update_job("fp", expected_key="old", status="failed")
         self.db.begin_job("fp", "video", "new", previous_key="old")
-        self.db.update_job("fp", status="failed")
+        self.db.update_job("fp", expected_key="new", status="failed")
         with self.assertRaises(CuddlerError) as caught:
             self.db.begin_job("fp", "video", "stale", previous_key="old")
         self.assertEqual(caught.exception.code, "recovery_required")
@@ -50,10 +50,30 @@ class StateTest(unittest.TestCase):
 
     def test_terminal_reservation_does_not_authorize_credential_change(self):
         self.db.begin_job("fp", "video", "old", credential_identity="first")
-        self.db.update_job("fp", status="failed")
+        self.db.update_job("fp", expected_key="old", status="failed")
         with self.assertRaises(CuddlerError):
             self.db.begin_job("fp", "video", "new", previous_key="old", credential_identity="second")
         self.assertEqual(self.db.job("fp")["credential_identity"], "first")
+
+    def test_delayed_updates_cannot_mutate_a_replacement_attempt(self):
+        self.db.begin_job("fp", "video", "old", credential_identity="first")
+        self.db.update_job("fp", expected_key="old", status="failed")
+        self.db.begin_job("fp", "video", "new", previous_key="old", credential_identity="first")
+        self.db.update_job("fp", expected_key="new", status="queued", job_id="vid_new")
+        original = self.db.job("fp")
+        self.now += 60
+        for status in ("queued", "running", "succeeded", "failed", "canceled"):
+            with self.subTest(status=status), self.assertRaises(CuddlerError) as caught:
+                self.db.update_job("fp", expected_key="old", status=status,
+                                   job_id="vid_old", credential_identity="stale")
+            self.assertEqual(caught.exception.code, "recovery_required")
+            self.assertEqual(self.db.job("fp"), original)
+
+    def test_a_missing_attempt_is_not_silently_recreated_by_a_reply(self):
+        with self.assertRaises(CuddlerError) as caught:
+            self.db.update_job("missing", expected_key="old", status="queued", job_id="vid_old")
+        self.assertEqual(caught.exception.code, "recovery_required")
+        self.assertIsNone(self.db.job("missing"))
 
     def test_upload_lifecycle(self):
         self.db.begin_upload("d:image", "upl-key")
@@ -147,7 +167,7 @@ class StateFailureTest(unittest.TestCase):
         self.addCleanup(holder.close)
         holder.execute("BEGIN EXCLUSIVE")
         calls = (lambda: db.job("fp"), lambda: db.begin_job("other", "video", "k2"),
-                 lambda: db.update_job("fp", status="queued"), db.cleanup,
+                 lambda: db.update_job("fp", expected_key="k", status="queued"), db.cleanup,
                  lambda: StateDB(self.dir, timeout=0.05))
         for call in calls:
             with self.assertRaises(CuddlerError) as caught:
@@ -188,10 +208,10 @@ class StateFailureTest(unittest.TestCase):
                     fingerprint = f"fp-{number}-{turn % 3}"
                     previous = db.job(fingerprint)
                     if previous:
-                        db.update_job(fingerprint, status="failed")
+                        db.update_job(fingerprint, expected_key=previous["idempotency_key"], status="failed")
                     db.begin_job(fingerprint, "video", f"k-{number}-{turn}",
                                  previous_key=previous["idempotency_key"] if previous else None)
-                    db.update_job(fingerprint, status="queued", job_id=f"vid_{number}")
+                    db.update_job(fingerprint, expected_key=f"k-{number}-{turn}", status="queued", job_id=f"vid_{number}")
                     self.assertEqual(db.job(fingerprint)["job_id"], f"vid_{number}")
                     db.cleanup()
             except BaseException as error:  # collected here: an exception in a thread would otherwise vanish
@@ -214,7 +234,7 @@ class StateFailureTest(unittest.TestCase):
         db.begin_upload("pending", "k4")
         db.remember_upload("pending", "upl_pending", credential_identity="binding")
         self.now = start + 2400
-        db.update_job("finished", status="succeeded", job_id="vid_1")  # the result exists from here on
+        db.update_job("finished", expected_key="k2", status="succeeded", job_id="vid_1")  # the result exists from here on
         for moment, expect in (
                 (UNFINISHED_UPLOAD_TTL - 1, dict(pending=True, ready=True, submitting=True, finished=True)),
                 (UNFINISHED_UPLOAD_TTL + 1, dict(pending=False, ready=True, submitting=True, finished=True)),
@@ -250,7 +270,7 @@ class StateFailureTest(unittest.TestCase):
         db = self.open()
         for name, status in (("unknown", "submitting"), ("queued", "queued"), ("running", "running")):
             db.begin_job(name, "video", f"key-{name}", credential_identity="key-binding")
-            db.update_job(name, status=status)
+            db.update_job(name, expected_key=f"key-{name}", status=status)
         self.now += 90 * 86400
         db.cleanup()
         for name in ("unknown", "queued", "running"):
