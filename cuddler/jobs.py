@@ -109,10 +109,11 @@ class JobRunner:
         """The succeeded job. `progress` gets ("uploading"), ("queued", position) or ("running", seconds)."""
         fingerprint = await asyncio.to_thread(self.fingerprint, spec)  # hashes up to 200 MiB of media
         async with self._lock(fingerprint):
-            job = await self._attach(spec.kind, fingerprint)
-            if job is None:
-                job = await self._submit(spec, fingerprint, interrupted, progress)
-            return await self._wait(spec.kind, fingerprint, job, interrupted, progress)
+            attempt = await self._attach(spec.kind, fingerprint)
+            if attempt is None:
+                attempt = await self._submit(spec, fingerprint, interrupted, progress)
+            job, key = attempt
+            return await self._wait(spec.kind, fingerprint, job, key, interrupted, progress)
 
     @asynccontextmanager
     async def _lock(self, fingerprint):
@@ -155,13 +156,13 @@ class JobRunner:
             # An authenticated succeeded job with a null output proves access
             # and expiry. Re-generating it is the existing paid product policy.
             await self._state_call(self._state.update_job, fingerprint, status="failed",
-                                   credential_identity=identity)
+                                   expected_key=row["idempotency_key"], credential_identity=identity)
             return None
         # Reading a known task proves this key can access its organization.
         # This permits ordinary key rotation without guessing an org ID.
         await self._state_call(self._state.update_job, fingerprint, status=job["status"],
-                               credential_identity=identity)
-        return job
+                               expected_key=row["idempotency_key"], credential_identity=identity)
+        return job, row["idempotency_key"]
 
     async def _submit(self, spec, fingerprint, interrupted, progress):
         row = await self._state_call(self._state.job, fingerprint)
@@ -193,10 +194,12 @@ class JobRunner:
             job = await self._create(spec.kind, _request_body(spec.body, added), key)
         except CuddlerError as error:
             if error.code in REFUSED:
-                await self._state_call(self._state.update_job, fingerprint, status="failed")  # no job has this key
+                await self._state_call(self._state.update_job, fingerprint, expected_key=key,
+                                       status="failed")  # no job has this key
             raise
-        await self._state_call(self._state.update_job, fingerprint, status=job["status"], job_id=job["id"])
-        return job
+        await self._state_call(self._state.update_job, fingerprint, expected_key=key,
+                               status=job["status"], job_id=job["id"])
+        return job, key
 
     async def _prepare(self, spec, progress):
         """Upload the media and check the price. Returns what the create request adds to `spec.body`."""
@@ -229,12 +232,12 @@ class JobRunner:
                     raise
                 await self._sleep(min(2 ** attempt, 8))
 
-    async def _wait(self, kind, fingerprint, job, interrupted, progress):
+    async def _wait(self, kind, fingerprint, job, key, interrupted, progress):
         started = self._clock()
         delay = self._poll_first
         while job["status"] in ACTIVE:
             if interrupted():
-                await self._stop(kind, fingerprint, job)
+                await self._stop(kind, fingerprint, job, key)
             waited = self._clock() - started
             if waited >= self._max_wait:
                 raise CuddlerError("wait_timeout")
@@ -251,10 +254,11 @@ class JobRunner:
                     raise
                 delay = max(delay, float(error.retry_after or 0))
                 continue
-            await self._state_call(self._state.update_job, fingerprint, status=job["status"], job_id=job["id"])
+            await self._state_call(self._state.update_job, fingerprint, expected_key=key,
+                                   status=job["status"], job_id=job["id"])
         if job["status"] == "succeeded":
             return job
-        await self._state_call(self._state.update_job, fingerprint, status=job["status"])
+        await self._state_call(self._state.update_job, fingerprint, expected_key=key, status=job["status"])
         if job["status"] == "canceled":
             raise CuddlerError("job_canceled")
         failure = job.get("error") or {}
@@ -268,12 +272,12 @@ class JobRunner:
                 return
             await self._sleep(min(0.5, remaining))
 
-    async def _stop(self, kind, fingerprint, job):
+    async def _stop(self, kind, fingerprint, job, key):
         """Stop waiting. A queued job is canceled when the Platform lets us; any other job keeps running."""
         if job["status"] == "queued":
             try:
                 job = await asyncio.to_thread(self._client.cancel, kind, job["id"])
-                await self._state_call(self._state.update_job, fingerprint, status=job["status"])
+                await self._state_call(self._state.update_job, fingerprint, expected_key=key, status=job["status"])
             except CuddlerError as error:
                 if error.code not in RETRYABLE | {"not_cancelable"}:  # not cancelable: it started, or an image
                     raise

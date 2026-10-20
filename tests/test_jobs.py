@@ -382,6 +382,91 @@ class JobRunnerTest(unittest.IsolatedAsyncioTestCase):
         return JobRunner(client, self.state, Uploader(client, self.state, sleep=lambda s: None),
                          sleep=self.clock.sleep, clock=self.clock, operation_locks=operation_locks)
 
+    async def test_a_stale_terminal_reply_cannot_unlock_a_newer_paid_attempt(self):
+        spec = self.spec()
+        fingerprint = self.runner.fingerprint(spec)
+        identity = self.runner._client.recovery_identity()
+        self.state.begin_job(fingerprint, "video", "old", credential_identity=identity)
+        self.state.update_job(fingerprint, expected_key="old", status="running", job_id=fakes.VIDEO_ID)
+        other = StateDB(Path(self.tmp.name))
+        replacement = "vid_" + "B" * 20
+        send = self.transport.send
+
+        def delayed_response(request):
+            if request.method == "GET" and request.url.endswith(fakes.VIDEO_ID):
+                # A second process sees the old failure and starts its replacement
+                # before this process receives the delayed response for the old ID.
+                other.update_job(fingerprint, expected_key="old", status="failed")
+                other.begin_job(fingerprint, "video", "replacement", previous_key="old",
+                                credential_identity=identity)
+                other.update_job(fingerprint, expected_key="replacement", status="queued", job_id=replacement)
+            return send(request)
+
+        self.transport.send = delayed_response
+        self.transport.add("GET", JOB_URL, body=fakes.video_job("failed"))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job(spec)
+        self.assertEqual(caught.exception.code, "recovery_required")
+        row = self.state.job(fingerprint)
+        self.assertEqual((row["idempotency_key"], row["job_id"], row["status"]),
+                         ("replacement", replacement, "queued"))
+        self.assertEqual(self.transport.calls("POST", "/videos"), [])
+
+    async def test_late_create_poll_and_cancel_replies_keep_the_new_attempt(self):
+        for phase in ("create", "refusal", "poll", "cancel"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                transport = fakes.FakeTransport()
+                runner, state = make_runner(directory, transport, FakeClock())
+                other = StateDB(Path(directory))
+                spec = self.spec()
+                fingerprint = runner.fingerprint(spec)
+                identity = runner._client.recovery_identity()
+                replacement = "vid_" + "B" * 20
+                if phase in {"poll", "cancel"}:
+                    state.begin_job(fingerprint, "video", "old", credential_identity=identity)
+                    state.update_job(fingerprint, expected_key="old", status="running", job_id=fakes.VIDEO_ID)
+                send = transport.send
+                reads = []
+
+                def delayed_response(request):
+                    if request.method == "GET":
+                        reads.append(request)
+                    replace = (phase in {"create", "refusal"} and request.url == fakes.API + "/videos"
+                               or phase == "poll" and len(reads) == 2
+                               or phase == "cancel" and request.url.endswith("/cancel"))
+                    if replace:
+                        key = other.job(fingerprint)["idempotency_key"]
+                        other.update_job(fingerprint, expected_key=key, status="failed")
+                        other.begin_job(fingerprint, "video", "replacement", previous_key=key,
+                                        credential_identity=identity)
+                        other.update_job(fingerprint, expected_key="replacement", status="queued", job_id=replacement)
+                    return send(request)
+
+                transport.send = delayed_response
+                transport.add("POST", "/videos/estimate", body=fakes.estimate())
+                transport.add("POST", "/videos", status=400 if phase == "refusal" else 202,
+                              body=fakes.error("invalid_request", 400) if phase == "refusal"
+                              else fakes.video_job("queued"))
+                transport.add("GET", JOB_URL, body=fakes.video_job("queued"))
+                transport.add("GET", JOB_URL, body=fakes.video_job("failed"))
+                transport.add("POST", JOB_URL + "/cancel", body=fakes.video_job("canceled"))
+                with self.assertRaises(CuddlerError) as caught:
+                    await runner.run(spec, interrupted=lambda: phase == "cancel")
+                self.assertEqual(caught.exception.code, "recovery_required")
+                row = state.job(fingerprint)
+                self.assertEqual((row["idempotency_key"], row["job_id"], row["status"]),
+                                 ("replacement", replacement, "queued"))
+                # The next actual runner attaches to the replacement; it never
+                # estimates or creates a third paid operation after the stale reply.
+                transport.send = send
+                transport.routes.clear()
+                transport.add("GET", "/videos/" + replacement,
+                              body=fakes.video_job("succeeded", job_id=replacement))
+                before = len(transport.calls("POST", "/videos"))
+                again, _ = make_runner(directory, transport, FakeClock())
+                self.assertEqual((await again.run(spec))["id"], replacement)
+                self.assertEqual(len(transport.calls("POST", "/videos")), before)
+
     async def test_an_unknown_create_cannot_be_replayed_under_a_different_key(self):
         self.script_estimate()
         self.transport.fail("POST", "/videos", CuddlerError("network_error"))
@@ -437,7 +522,7 @@ class JobRunnerTest(unittest.IsolatedAsyncioTestCase):
     async def test_a_legacy_job_with_an_id_can_be_bound_only_after_reading_it(self):
         fingerprint = self.runner.fingerprint(self.spec())
         self.state.begin_job(fingerprint, "video", "legacy-request")
-        self.state.update_job(fingerprint, status="queued", job_id=fakes.VIDEO_ID)
+        self.state.update_job(fingerprint, expected_key="legacy-request", status="queued", job_id=fakes.VIDEO_ID)
         self.transport.add("GET", JOB_URL, body=fakes.video_job("succeeded"))
         self.assertEqual((await self.run_job())["id"], fakes.VIDEO_ID)
         self.assertEqual(self.transport.calls("POST", "/videos"), [])
