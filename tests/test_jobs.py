@@ -158,6 +158,24 @@ class JobRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(creates[0].headers["Idempotency-Key"], creates[1].headers["Idempotency-Key"])
         self.assertEqual(self.state.job(self.runner.fingerprint(self.spec()))["job_id"], new_id)
 
+    async def test_another_jobs_expired_reply_cannot_trigger_a_paid_replacement(self):
+        self.script_estimate()
+        self.transport.add("POST", "/videos", status=202, body=fakes.video_job("succeeded"))
+        self.transport.add("POST", "/videos", status=202,
+                           body=fakes.video_job("succeeded", job_id="vid_" + "C" * 20))
+        await self.run_job()
+        fingerprint = self.runner.fingerprint(self.spec())
+        original = self.state.job(fingerprint)
+        # A mismatched response cannot prove expiry or access to the requested
+        # task, even if it has the normal shape of an expired successful job.
+        self.transport.add("GET", JOB_URL,
+                           body=fakes.video_job("succeeded", job_id="vid_" + "B" * 20, output=None))
+        with self.assertRaises(CuddlerError) as caught:
+            await self.run_job()
+        self.assertEqual(caught.exception.code, "invalid_response")
+        self.assertEqual(len(self.transport.calls("POST", "/videos")), 1)
+        self.assertEqual(self.state.job(fingerprint), original)
+
     async def test_a_lost_create_response_is_retried_with_the_same_key(self):
         self.script_estimate()
         self.transport.fail("POST", "/videos", CuddlerError("network_error"))

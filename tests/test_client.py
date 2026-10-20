@@ -214,6 +214,19 @@ class ClientTest(unittest.TestCase):
                 created, replayed = self.client.create(kind, {"model": "m"}, "job-0123456789abcdef")
                 self.assertEqual((created["id"], replayed), (job_id, False))
 
+    def test_another_tasks_expiry_is_never_accepted_as_a_bound_response(self):
+        for kind, job_id in fakes.JOB_IDS.items():
+            body = fakes.job(kind, "succeeded", output=None)
+            body["id"] = job_id[:-1] + "Z"
+            for operation in ("get", "cancel"):
+                if operation == "cancel" and kind == "image":
+                    continue
+                with self.subTest(kind=kind, operation=operation):
+                    method = "GET" if operation == "get" else "POST"
+                    path = f"/{JOB_PATHS[kind]}/{job_id}" + ("/cancel" if operation == "cancel" else "")
+                    error = self.error_for(lambda c: getattr(c, operation)(kind, job_id), method, path, 200, body)
+                    self.assertEqual(error.code, "invalid_response")
+
     def test_cancel_uses_the_cancel_route_and_images_have_none(self):
         self.transport.add("POST", f"/videos/{fakes.VIDEO_ID}/cancel", body=fakes.video_job("canceled"))
         self.transport.add("POST", f"/speech/{fakes.SPEECH_ID}/cancel", body=fakes.job("speech", "canceled"))
